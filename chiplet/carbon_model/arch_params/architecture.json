@@ -1,0 +1,8 @@
+{
+"Chiplet_1" : {
+          "type" : "logic",
+          "area" : 93.55,
+          "node" : 7
+        },
+"pkg_type" : "RDL"
+}

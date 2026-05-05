@@ -1,0 +1,34 @@
+{
+    "max_chiplet": 6,
+    "sys_array": ["64x64","96x96","128x128","192x192"],
+    "tech_nodes": ["7", "10", "14"],
+    "sram_buf_sizes": {
+      "64x64": [256, 512, 768, 1024],
+      "96x96": [512, 1024, 1536, 2048],
+      "128x128": [1024, 2048, 3072, 4096],
+      "192x192": [2048, 4096, 6144, 8192]
+    },
+    "pkg": {
+      "inter_pkg_architecture": [
+        "2d_na",
+        "2.5d_emib",
+        "2.5d_rdl",
+        "3d_tsv",
+        "3d_u_bump",
+        "3d_hyb_bond"
+      ],
+      "protocol": [
+        "ucie_std",
+        "ucie_adv",
+        "aib",
+        "bow",
+        "ucie_3d"
+      ],
+      "mem_pkg_architecture": [
+        "ddr4",
+        "ddr5",
+        "hbm2",
+        "hbm3"
+      ]
+}
+  }

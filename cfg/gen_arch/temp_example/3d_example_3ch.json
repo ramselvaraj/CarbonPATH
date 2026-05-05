@@ -1,0 +1,66 @@
+{
+    "Chiplet_1": {
+        "tech_node": "14",
+        "sys_array_size": "128x128",
+        "sram_buf": 3072,
+        "area": 6.315940422320179,
+        "power": 6.821646341899999
+    },
+    "Chiplet_2": {
+        "tech_node": "10",
+        "sys_array_size": "128x128",
+        "sram_buf": 2048,
+        "area": 2.972908090547913,
+        "power": 5.538366334949999
+    },
+    "Chiplet_3": {
+        "tech_node": "7",
+        "sys_array_size": "128x128",
+        "sram_buf": 2048,
+        "area": 1.86237254,
+        "power": 4.475
+    },
+    "pkg": {
+        "HI_pkg_type": "3d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_2",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_base"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_middle1"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "na",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_top"
+            }
+        ],
+        "protocol_3d": "ucie_3d",
+        "protocol_2.5d": "na",
+        "mem_pkg_conn": {
+            "mem_type": "ddr5",
+            "Chiplet_1": 5,
+            "Chiplet_2": 2,
+            "Chiplet_3": 1
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "chiplet_data_sharing_enabled": 0,
+            "if_splitting_k": 1,
+            "dataflow": [
+                "is"
+            ],
+            "assign_workload_in_ascending_order": 0,
+            "static_tiling": 0,
+            "merge_tiles": 0
+        }
+    }
+}

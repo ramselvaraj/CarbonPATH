@@ -1,0 +1,80 @@
+{
+    "Chiplet_1": {
+        "tech_node": "7",
+        "sys_array_size": "192x192",
+        "sram_buf": 6144,
+        "area": 2.739629952,
+        "power": 10.4826
+    },
+    "Chiplet_2": {
+        "tech_node": "10",
+        "sys_array_size": "64x64",
+        "sram_buf": 256,
+        "area": 0.570016759,
+        "power": 1.384591584
+    },
+    "Chiplet_3": {
+        "tech_node": "14",
+        "sys_array_size": "64x64",
+        "sram_buf": 512,
+        "area": 1.084616417,
+        "power": 1.705411585
+    },
+    "Chiplet_4": {
+        "tech_node": "7",
+        "sys_array_size": "96x96",
+        "sram_buf": 1024,
+        "area": 0.957922696,
+        "power": 2.51875
+    },
+    "pkg": {
+        "HI_pkg_type": "3d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_3",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_base"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "Chiplet_4",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_middle1"
+            },
+            {
+                "from": "Chiplet_4",
+                "to": "Chiplet_2",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_middle2"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "na",
+                "connection_type": "3d_hyb_bond",
+                "loc": "stack0_top"
+            }
+        ],
+        "protocol_3d": "ucie_3d",
+        "protocol_2.5d": "na",
+        "mem_pkg_conn": {
+            "mem_type": "ddr4",
+            "Chiplet_1": 4,
+            "Chiplet_2": 1,
+            "Chiplet_3": 2,
+            "Chiplet_4": 1
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "assign_workload_in_ascending_order": 1,
+            "chiplet_data_sharing_enabled": 0,
+            "dataflow": [
+                "is"
+            ],
+            "if_splitting_k": 0,
+            "merge_tiles": 0,
+            "static_tiling": 0
+        }
+    }
+}

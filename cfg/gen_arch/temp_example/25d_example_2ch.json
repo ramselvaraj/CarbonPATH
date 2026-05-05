@@ -1,0 +1,52 @@
+{
+    "Chiplet_1": {
+        "tech_node": "10",
+        "sys_array_size": "64x64",
+        "sram_buf": 256,
+        "area": 0.656621759447044,
+        "power": 1.3845915837374998
+    },
+    "Chiplet_2": {
+        "tech_node": "14",
+        "sys_array_size": "192x192",
+        "sram_buf": 8192,
+        "area": 15.436124909546791,
+        "power": 15.979573171754398
+    },
+    "pkg": {
+        "HI_pkg_type": "2.5d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_1",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_2",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            }
+        ],
+        "protocol_3d": "na",
+        "protocol_2.5d": "aib",
+        "mem_pkg_conn": {
+            "mem_type": "ddr5",
+            "Chiplet_1": 1,
+            "Chiplet_2": 7
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "chiplet_data_sharing_enabled": 0,
+            "if_splitting_k": 0,
+            "dataflow": [
+                "is"
+            ],
+            "assign_workload_in_ascending_order": 0,
+            "static_tiling": 0,
+            "merge_tiles": 0
+        }
+    }
+}

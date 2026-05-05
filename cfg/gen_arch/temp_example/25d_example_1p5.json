@@ -1,0 +1,116 @@
+{
+    "Chiplet_1": {
+        "tech_node": "7",
+        "sys_array_size": "64x64",
+        "sram_buf": 256,
+        "area": 0.378988,
+        "power": 1.11875
+    },
+    "Chiplet_2": {
+        "tech_node": "7",
+        "sys_array_size": "96x96",
+        "sram_buf": 512,
+        "area": 0.784712696,
+        "power": 2.51875
+    },
+    "Chiplet_3": {
+        "tech_node": "7",
+        "sys_array_size": "128x128",
+        "sram_buf": 1024,
+        "area": 1.51595254,
+        "power": 4.475
+    },
+    "Chiplet_4": {
+        "tech_node": "7",
+        "sys_array_size": "192x192",
+        "sram_buf": 2048,
+        "area": 3.432469952,
+        "power": 10.4826
+    },
+    "pkg": {
+        "HI_pkg_type": "2.5d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_4",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_4",
+                "to": "Chiplet_2",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "Chiplet_4",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "Chiplet_2",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "Chiplet_1",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_4",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_1",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_2",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            }
+        ],
+        "protocol_3d": "na",
+        "protocol_2.5d": "aib",
+        "mem_pkg_conn": {
+            "mem_type": "ddr5",
+            "Chiplet_1": 1,
+            "Chiplet_2": 1,
+            "Chiplet_3": 2,
+            "Chiplet_4": 4
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "chiplet_data_sharing_enabled": 0,
+            "if_splitting_k": 1,
+            "dataflow": [
+                "ws"
+            ],
+            "assign_workload_in_ascending_order": 0,
+            "static_tiling": 0,
+            "merge_tiles": 0
+        }
+    }
+}

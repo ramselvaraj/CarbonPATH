@@ -1,0 +1,72 @@
+{
+    "Chiplet_1": {
+        "tech_node": "14",
+        "sys_array_size": "192x192",
+        "sram_buf": 4096,
+        "area": 12.799492673176792,
+        "power": 15.979573171754398
+    },
+    "Chiplet_2": {
+        "tech_node": "7",
+        "sys_array_size": "128x128",
+        "sram_buf": 4096,
+        "area": 2.55521354,
+        "power": 4.475
+    },
+    "Chiplet_3": {
+        "tech_node": "7",
+        "sys_array_size": "192x192",
+        "sram_buf": 4096,
+        "area": 4.1253109519999995,
+        "power": 10.4826
+    },
+    "pkg": {
+        "HI_pkg_type": "2.5d_3d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_2",
+                "connection_type": "3d_tsv",
+                "loc": "stack0_base"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "na",
+                "connection_type": "3d_tsv",
+                "loc": "stack0_top"
+            },
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_rdl",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_3",
+                "to": "Chiplet_1",
+                "connection_type": "2.5d_rdl",
+                "loc": "2.5d_chiplet"
+            }
+        ],
+        "protocol_3d": "ucie_3d",
+        "protocol_2.5d": "ucie_std",
+        "mem_pkg_conn": {
+            "mem_type": "ddr4",
+            "Chiplet_1": 5,
+            "Chiplet_2": 1,
+            "Chiplet_3": 2
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "chiplet_data_sharing_enabled": 0,
+            "if_splitting_k": 1,
+            "dataflow": [
+                "os"
+            ],
+            "assign_workload_in_ascending_order": 0,
+            "static_tiling": 0,
+            "merge_tiles": 0
+        }
+    }
+}

@@ -1,0 +1,15 @@
+{
+  "DRAM_pj_per_bit": {
+    "ddr4": 30,
+    "ddr5": 20,
+    "hbm2": 5,
+    "hbm3": 3
+  },
+  "Die2Die_pj_per_bit": {
+    "ucie_std": 0.5,
+    "ucie_adv": 0.25,
+    "ucie_3d": 0.005,
+    "aib": 0.25,
+    "bow": 0.75
+  }
+}
