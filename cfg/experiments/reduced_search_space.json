@@ -1,0 +1,14 @@
+{
+  "max_chiplet": 1,
+  "sys_array": ["64x64", "128x128"],
+  "tech_nodes": ["7", "14"],
+  "sram_buf_sizes": {
+    "64x64": [256],
+    "128x128": [1024]
+  },
+  "pkg": {
+    "inter_pkg_architecture": ["2d_na"],
+    "protocol": ["ucie_std"],
+    "mem_pkg_architecture": ["ddr4", "ddr5"]
+  }
+}

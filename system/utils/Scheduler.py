@@ -185,21 +185,32 @@ class Scheduler:
 
         assert(all(w.assigned for core in self.systolic_arrays for w in core.workloads )),f"[ERROR]: Statically 3D Schedule finished with unassigned workloads"
 
-    def __calculate_dram_latency_energy(self, core: SystolicArray):
+    def __calculate_dram_latency_energy(
+        self,
+        core: SystolicArray,
+        activation_from_dram=True,
+        output_to_dram=True,
+    ):
         if len(core.workloads) > 0:
-            local_load_words = sum(wl.m * wl.k + wl.k * wl.n for wl in core.workloads)
+            local_activation_words = (
+                sum(wl.m * wl.k for wl in core.workloads)
+                if activation_from_dram
+                else 0
+            )
+            local_weight_words = sum(wl.k * wl.n for wl in core.workloads)
+            local_load_words = local_activation_words + local_weight_words
             dram_load_cycles =  local_load_words / core.dram_bandwidth # latency in cycle
             dram_load_ns = dram_load_cycles / core.frequency * 10**9 # latency in ns
             #energy calculation
             dram_load_energy = local_load_words * core.dram_energy_scale * WORD_SIZE * 8 # in pj
             
             # calculate the DRAM write latency and energy
-            if not self.splitting_k:
+            if not self.splitting_k and output_to_dram:
                 # no splitting k, every core has to write back the result to DRAM
                 local_write_words = sum(wl.m * wl.n for wl in core.workloads)
                 dram_write_cycles = local_write_words / core.dram_bandwidth # latency in cycles
                 dram_write_ns = dram_write_cycles / core.frequency * 10**9 # latency in ns
-                dram_write_energy = local_load_words * core.dram_energy_scale * WORD_SIZE * 8 # in pj
+                dram_write_energy = local_write_words * core.dram_energy_scale * WORD_SIZE * 8 # in pj
             else:
                 dram_write_ns = 0
                 dram_write_energy = 0
@@ -494,7 +505,12 @@ class Scheduler:
 
         return final_total_latency, total_energy
 
-    def system_modeling(self, system: ChipletSystem) -> tuple[float, float]:
+    def system_modeling(
+        self,
+        system: ChipletSystem,
+        activation_from_dram=True,
+        output_to_dram=True,
+    ) -> tuple[float, float]:
         #top-level function to launch system modeling, return the modeled total latency and energy 
         # construct latency timeline for every core: Phase1: from dram_load to finish compute
         cores: list[SystolicArray] = list (system.core_dict.values())
@@ -503,7 +519,11 @@ class Scheduler:
 
         max_core = max(cores)
         for core in cores:
-            dram_latency_ns, dram_energy_pj = self.__calculate_dram_latency_energy(core)
+            dram_latency_ns, dram_energy_pj = self.__calculate_dram_latency_energy(
+                core,
+                activation_from_dram=activation_from_dram,
+                output_to_dram=output_to_dram,
+            )
             core_time_stamp[core.id] += dram_latency_ns
             core_time_stamp[core.id] += core.total_cycle / core.frequency * 10**9 # accu total compute latency in ns
             core_energy_stamp[core.id] += dram_energy_pj
@@ -522,7 +542,7 @@ class Scheduler:
         current_time = compute_time + total_interconnect_latency # synchronize every core for final reduction
         # accumulate the reduction latency
         current_time += reduction_latency
-        if self.splitting_k:
+        if self.splitting_k and output_to_dram:
             # write back to DRAM from max_core if splitting K is enabled. 
             total_write_back_words = self.M * self.N
             write_back_latency_cycle = total_write_back_words / max_core.dram_bandwidth 

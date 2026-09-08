@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "vit_ffn",
+  "dtype": "int8",
+  "input": {"batch_size": 197, "features": 768},
+  "layers": [
+    {"name": "expand", "op": "linear", "out_features": 3072},
+    {"name": "project", "op": "linear", "out_features": 768}
+  ],
+  "memory": {"intermediate_policy": "cold_dram"}
+}

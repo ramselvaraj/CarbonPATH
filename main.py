@@ -1,4 +1,5 @@
 from ast import arg
+import hashlib
 import json 
 import os
 import random
@@ -30,9 +31,13 @@ from chiplet.carbon_model.ECO_chip import find_carbon
 from system.utils.GEMMWorkload import GEMMWorkload
 from system.utils.Scheduler import CHIP2CHIP_TRANSFER, Scheduler
 from system.utils.ChipletSystem import ChipletSystem
-from system.utils.SimulationCache import SimulationCache
-from config import print_info, fast_test, latency_en, \
-                    sram_selection_mode
+from system.utils.SimulationCache import SIMULATION_MODEL_VERSION, SimulationCache
+from system.utils.IntermediateMemoryPolicy import (
+    INTERMEDIATE_POLICIES,
+    build_boundary_mapping,
+    plan_boundary,
+)
+from config import print_info, fast_test, latency_en, sram_selection_mode
 
 
 #########
@@ -50,8 +55,54 @@ scaling_factors = {int(k): v for k, v in freq_config['freq_scaling_factors'].ite
 ## Workload 
 with open("cfg/examples/workload.json") as f:
     workload = json.load(f)
-GEMM_SHAPE = {int(k): v for k, v in workload.items()}
+WORKLOAD_CONFIGS = {int(k): v for k, v in workload.items()}
+CALIBRATION_MODEL_VERSION = SIMULATION_MODEL_VERSION
 ######
+
+
+def parse_workload_entry(workload_id, entry):
+    """Normalize a legacy GEMM or an ordered, cold-memory GEMM sequence."""
+    if isinstance(entry, list):
+        sequence_name = f"workload_{workload_id}"
+        raw_gemms = [{"name": "gemm_1", "shape": entry}]
+    elif isinstance(entry, dict):
+        sequence_name = entry.get("name", f"workload_{workload_id}")
+        raw_gemms = entry.get("gemms")
+        if not isinstance(raw_gemms, list) or len(raw_gemms) < 2:
+            raise ValueError(f"Workload {workload_id} must define at least two GEMMs")
+    else:
+        raise ValueError(f"Workload {workload_id} must be a GEMM shape or sequence object")
+
+    gemms = []
+    names = set()
+    for index, raw_gemm in enumerate(raw_gemms, start=1):
+        if not isinstance(raw_gemm, dict):
+            raise ValueError(f"GEMM {index} in workload {workload_id} must be an object")
+        name = raw_gemm.get("name", f"gemm_{index}")
+        shape = raw_gemm.get("shape")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"GEMM {index} in workload {workload_id} must have a name")
+        if name in names:
+            raise ValueError(f"GEMM names must be unique within workload {workload_id}")
+        if (
+            not isinstance(shape, (list, tuple))
+            or len(shape) != 3
+            or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in shape)
+        ):
+            raise ValueError(f"GEMM '{name}' must have three positive integer dimensions [M, K, N]")
+        names.add(name)
+        gemms.append({"name": name, "shape": tuple(shape)})
+
+    for previous, current in zip(gemms, gemms[1:]):
+        previous_m, _, previous_n = previous["shape"]
+        current_m, current_k, _ = current["shape"]
+        if current_m != previous_m or current_k != previous_n:
+            raise ValueError(
+                f"GEMM '{current['name']}' must consume '{previous['name']}' output: "
+                f"expected M={previous_m}, K={previous_n}, got M={current_m}, K={current_k}"
+            )
+
+    return {"id": workload_id, "name": sequence_name, "gemms": gemms}
 
 
 
@@ -65,19 +116,149 @@ def build_scheduler_system(workload, arch_dict):
 
 
 
-def simulate_latency_energy(cache: SimulationCache, arch_dict: dict, dbg = False):
-
-
-    wl = GEMMWorkload(GEMM_M, GEMM_K, GEMM_N)
-
-
+def prepare_single_gemm(cache: SimulationCache, arch_dict: dict, shape):
+    wl = GEMMWorkload(*shape)
     scheduler, system = build_scheduler_system(wl, arch_dict)
     cache.all_cores_simulation_with_cache(scheduler.systolic_arrays)
-    latency_ns, energy_pj = scheduler.system_modeling(system)
+    return scheduler, system
 
-    sram_energy_pj = scheduler._get_sram_energy() #Use fucntion get_sram_area_energy for this 
-    
-    return latency_ns, energy_pj, sram_energy_pj
+
+def simulate_single_gemm(
+    cache: SimulationCache,
+    arch_dict: dict,
+    shape,
+    prepared=None,
+    activation_from_dram=True,
+    output_to_dram=True,
+):
+    scheduler, system = prepared or prepare_single_gemm(cache, arch_dict, shape)
+    latency_ns, energy_pj = scheduler.system_modeling(
+        system,
+        activation_from_dram=activation_from_dram,
+        output_to_dram=output_to_dram,
+    )
+    sram_energy_pj = scheduler._get_sram_energy()
+    return {
+        "latency_ns": latency_ns,
+        "dram_interconnect_energy_pj": energy_pj,
+        "sram_energy_pj": sram_energy_pj,
+    }
+
+
+def collect_tile_mappings(scheduler):
+    mappings = []
+    for core in getattr(scheduler, "systolic_arrays", ()):
+        for tile in core.workloads:
+            mappings.append(
+                {
+                    "core_id": core.id,
+                    "m": tile.m,
+                    "k": tile.k,
+                    "n": tile.n,
+                    "m_offset": tile.m_offset,
+                    "k_offset": tile.k_offset,
+                    "n_offset": tile.n_offset,
+                }
+            )
+    return mappings
+
+
+def simulate_latency_energy(
+    cache: SimulationCache,
+    arch_dict: dict,
+    workload_sequence,
+    dbg=False,
+    intermediate_policy="direct_forward",
+):
+    if intermediate_policy not in INTERMEDIATE_POLICIES:
+        raise ValueError(f"Unknown intermediate-memory policy: {intermediate_policy}")
+    prepared_gemms = [
+        prepare_single_gemm(cache, arch_dict, gemm["shape"])
+        for gemm in workload_sequence["gemms"]
+    ]
+    boundary_plans = []
+    for index, (producer, consumer) in enumerate(
+        zip(prepared_gemms, prepared_gemms[1:]),
+        start=1,
+    ):
+        mapping = build_boundary_mapping(
+            producer[0], producer[1], consumer[0], consumer[1]
+        )
+        boundary_plans.append(
+            plan_boundary(
+                boundary_index=index,
+                intermediate_bytes=mapping.intermediate_bytes,
+                transfers=mapping.transfers,
+                cores=mapping.cores,
+                policy=intermediate_policy,
+                mapping_valid=mapping.valid,
+                mapping_error=mapping.error,
+            )
+        )
+
+    gemm_metrics = []
+    for index, (gemm, prepared) in enumerate(
+        zip(workload_sequence["gemms"], prepared_gemms)
+    ):
+        incoming_boundary = boundary_plans[index - 1] if index > 0 else None
+        outgoing_boundary = boundary_plans[index] if index < len(boundary_plans) else None
+        metrics = simulate_single_gemm(
+            cache,
+            arch_dict,
+            gemm["shape"],
+            prepared=prepared,
+            activation_from_dram=(incoming_boundary is None or incoming_boundary.uses_dram),
+            output_to_dram=(outgoing_boundary is None or outgoing_boundary.uses_dram),
+        )
+        if incoming_boundary is not None and incoming_boundary.selected_method == "direct_forward":
+            metrics["latency_ns"] += incoming_boundary.latency_ns
+            metrics["dram_interconnect_energy_pj"] += incoming_boundary.energy_pj
+        metrics["tile_mappings"] = collect_tile_mappings(prepared[0])
+        gemm_metrics.append({"name": gemm["name"], "shape": gemm["shape"], **metrics})
+
+    latency_ns = sum(metric["latency_ns"] for metric in gemm_metrics)
+    energy_pj = sum(metric["dram_interconnect_energy_pj"] for metric in gemm_metrics)
+    sram_energy_pj = sum(metric["sram_energy_pj"] for metric in gemm_metrics)
+    return latency_ns, energy_pj, sram_energy_pj, gemm_metrics, boundary_plans
+
+
+def add_per_gemm_metrics(output, gemm_metrics, power):
+    for index, metrics in enumerate(gemm_metrics, start=1):
+        prefix = f"gemm_{index}"
+        output[f"{prefix}_name"] = metrics["name"]
+        output[f"{prefix}_shape"] = "x".join(str(value) for value in metrics["shape"])
+        output[f"{prefix}_latency_ns"] = metrics["latency_ns"]
+        output[f"{prefix}_dram_interconnect_energy_pj"] = metrics[
+            "dram_interconnect_energy_pj"
+        ]
+        output[f"{prefix}_sram_energy_pj"] = metrics["sram_energy_pj"]
+        output[f"{prefix}_total_energy_pj"] = (
+            metrics["dram_interconnect_energy_pj"]
+            + metrics["sram_energy_pj"]
+            + power * metrics["latency_ns"] * 1000
+        )
+
+
+def add_boundary_metrics(output, boundary_plans):
+    output["intermediate_policy_requested"] = (
+        boundary_plans[0].requested_policy if boundary_plans else "direct_forward"
+    )
+    for plan in boundary_plans:
+        prefix = f"boundary_{plan.boundary_index}"
+        output[f"{prefix}_selected_method"] = plan.selected_method
+        output[f"{prefix}_intermediate_bytes"] = plan.intermediate_bytes
+        output[f"{prefix}_retained_bytes"] = plan.retained_bytes
+        output[f"{prefix}_forwarded_bytes"] = plan.forwarded_bytes
+        output[f"{prefix}_dram_spilled_bytes"] = plan.dram_spilled_bytes
+        output[f"{prefix}_dram_traffic_bytes"] = plan.dram_traffic_bytes
+        output[f"{prefix}_latency_ns"] = plan.latency_ns
+        output[f"{prefix}_energy_pj"] = plan.energy_pj
+        output[f"{prefix}_producer_cores"] = ",".join(map(str, plan.producer_cores))
+        output[f"{prefix}_consumer_cores"] = ",".join(map(str, plan.consumer_cores))
+        output[f"{prefix}_routes"] = ";".join(
+            "->".join(map(str, route)) for route in plan.routes
+        )
+        output[f"{prefix}_fallback_reason"] = plan.fallback_reason
 
 class SystemGenerator:
     
@@ -117,20 +298,52 @@ class SystemGenerator:
         
         raise RuntimeError(f"[ERROR] Failed to generate a valid system after {max_retries} attempts.")
 
-def calculate_cost(profile_name='t1',cost_avgerage=dict, system_dict=dict, cache=SimulationCache):
+def calculate_cost(
+    profile_name='t1',
+    cost_avgerage=dict,
+    system_dict=dict,
+    cache=SimulationCache,
+    workload_sequence=None,
+    intermediate_policy="direct_forward",
+    simulation_result=None,
+    system_metrics=None,
+):
+    if workload_sequence is None:
+        raise ValueError("A workload sequence is required for cost calculation")
     print("\n[INFO] --- System Analysis Metrics ---") if print_info else None
-    power, area, dollar_cost = calculate_system_metrics(
+    power, area, dollar_cost = system_metrics or calculate_system_metrics(
         system_dict=system_dict
     )
     
     
     print(f"[DEBUG COST] ************** LATENCY ************** ") if print_info else None
-    if latency_en:
+    if latency_en and simulation_result is not None:
+        latency, energy_comm, energy_sram, gemm_metrics, boundary_plans = (
+            simulation_result
+        )
+    elif latency_en:
         print(f"[INFO] Working on calcuting performance ...") if print_info else None
-        latency, energy_comm, energy_sram = simulate_latency_energy(cache,system_dict)#, cost_no_latency_last_iteration, latency_coeff, average_latency)
+        latency, energy_comm, energy_sram, gemm_metrics, boundary_plans = simulate_latency_energy(
+            cache,
+            system_dict,
+            workload_sequence,
+            intermediate_policy=intermediate_policy,
+        )
     else: 
         latency = 0
         energy_comm = 0
+        energy_sram = 0
+        gemm_metrics = [
+            {
+                "name": gemm["name"],
+                "shape": gemm["shape"],
+                "latency_ns": 0,
+                "dram_interconnect_energy_pj": 0,
+                "sram_energy_pj": 0,
+            }
+            for gemm in workload_sequence["gemms"]
+        ]
+        boundary_plans = []
     
     total_operational_C_kg = total_opC(energy_sram=energy_sram, energy_comm=energy_comm, energy_compute=power*latency*1000, lifetime_years=3)
     print(f"[CARBON DEBUG] Operational Carbon for 3 years (kgs) = {total_operational_C_kg} ") if print_info else None
@@ -182,6 +395,10 @@ def calculate_cost(profile_name='t1',cost_avgerage=dict, system_dict=dict, cache
         cost_averages=cost_avgerage,
         arch_dict=system_dict
     )
+
+    add_per_gemm_metrics(raw_cost_dict, gemm_metrics, power)
+    add_boundary_metrics(raw_cost_dict, boundary_plans)
+    raw_cost_dict["intermediate_policy_requested"] = intermediate_policy
     return cost_val, norm_cost_dict, raw_cost_dict
 
 
@@ -191,15 +408,83 @@ def gen_initial_arch(config_path,stack_diff_size=True):
     final_config = system_builder.generate_system()
     return final_config    
 
-def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_file_path):
+
+def calibration_identity(
+    config_path, workload_sequence, intermediate_policy="direct_forward"
+):
+    if isinstance(config_path, dict):
+        search_space = config_path
+    else:
+        with open(config_path, encoding="utf-8") as file:
+            search_space = json.load(file)
+    payload = {
+        "model_version": CALIBRATION_MODEL_VERSION,
+        "search_space": search_space,
+        "workload": workload_sequence,
+        "intermediate_policy": intermediate_policy,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def validate_calibration(cost_averages):
+    average_keys = {
+        "avg_energy",
+        "avg_area",
+        "avg_dollar_cost",
+        "avg_latency",
+        "avg_embCarbon",
+        "avg_opeCarbon",
+    }
+    metrics = ("energy", "latency", "area", "cost", "embCarbon", "opeCarbon")
+    statistic_keys = {
+        f"{metric}_{statistic}"
+        for metric in metrics
+        for statistic in ("min", "max", "stddev", "mean", "median")
+    }
+    required = average_keys | statistic_keys
+    missing = sorted(required - cost_averages.keys())
+    if missing:
+        raise ValueError(f"Calibration is missing required metrics: {missing}")
+    for key in required:
+        value = cost_averages[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Calibration metric {key} must be numeric")
+        if not math.isfinite(value):
+            raise ValueError(f"Calibration metric {key} must be finite")
+    for metric in metrics:
+        if cost_averages[f"{metric}_min"] <= 0:
+            raise ValueError(f"Calibration metric {metric}_min must be positive")
+        if cost_averages[f"{metric}_median"] <= 0:
+            raise ValueError(f"Calibration metric {metric}_median must be positive")
+        if cost_averages[f"{metric}_max"] < cost_averages[f"{metric}_min"]:
+            raise ValueError(f"Calibration range for {metric} is invalid")
+    return cost_averages
+
+def get_calib_cost_avg(
+    calibration_iterations,
+    config_path,
+    cache,
+    calibration_file_path,
+    workload_sequence,
+    intermediate_policy="direct_forward",
+):
+    if calibration_iterations <= 0:
+        raise ValueError("calibration_iterations must be positive")
+    expected_identity = calibration_identity(
+        config_path, workload_sequence, intermediate_policy
+    )
     
     # Check if the calibration file already exists.
-    if os.path.exists(calibration_file_path) and calibration_iterations > 0:
+    if os.path.exists(calibration_file_path):
         print(f"\n[INFO] --- Loading existing cost averages from {calibration_file_path} ---") if print_info else None
         with open(calibration_file_path, 'r') as f:
             cost_averages = json.load(f)
-        print(f"[INFO] --- Successfully loaded averages: {cost_averages} ---") if print_info else None
-        return cost_averages
+        if cost_averages.get("_calibration_identity") == expected_identity:
+            validate_calibration(cost_averages)
+            print(f"[INFO] --- Successfully loaded averages: {cost_averages} ---") if print_info else None
+            return cost_averages
+        print("[INFO] Existing calibration is stale; regenerating it")
 
     print(f"\n[INFO] --- Running new calibration for {calibration_iterations} iterations in {calibration_file_path} ---") if print_info else None
     
@@ -233,7 +518,12 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
         print(f"[INFO] Initial architecture json written at cfg/gen_arch directory") if print_info else None
         
         power, area, cost = calculate_system_metrics(system_dict=final_config)
-        latency, energy_comm, energy_sram = simulate_latency_energy(cache=cache, arch_dict=final_config)
+        latency, energy_comm, energy_sram, gemm_metrics, boundary_plans = simulate_latency_energy(
+            cache=cache,
+            arch_dict=final_config,
+            workload_sequence=workload_sequence,
+            intermediate_policy=intermediate_policy,
+        )
         print(f"[INFO] Calibration stage, power, area, cost done. Now computing latency ....") if print_info else None 
         ope_carbon_kg = total_opC(energy_sram=energy_sram, energy_comm=energy_comm, energy_compute=power*latency*1000, lifetime_years=3)
         seg = build_design_tables(final_config)
@@ -263,7 +553,7 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
         opeCarbons.append(ope_carbon_kg)
         #####
         powers.append(power) # Keeping this for now, but we will use energy in the future
-        energy_compute = power*latency 
+        energy_compute = power * latency * 1000
         energy = energy_comm + energy_compute + energy_sram
         energys.append(energy)
         #####
@@ -284,6 +574,8 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
             "embCarbon": emb_carbon_kg,
             "opeCarbon": ope_carbon_kg
         }
+        add_per_gemm_metrics(cost_dict, gemm_metrics, power)
+        add_boundary_metrics(cost_dict, boundary_plans)
         
         #Add to current arch dict 
         final_config['cost_metrics'] = cost_dict
@@ -360,6 +652,8 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
     opecarbon_median = calib_cost_stats['opeCarbon']['median']
     
     cost_averages = {
+        "_calibration_model_version": CALIBRATION_MODEL_VERSION,
+        "_calibration_identity": expected_identity,
         "avg_energy": avg_energy,  
         "avg_area": avg_area,
         "avg_dollar_cost": avg_cost,
@@ -397,6 +691,7 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
         "opeCarbon_mean": opecarbon_mean,
         "opeCarbon_median": opecarbon_median
     }
+    validate_calibration(cost_averages)
 
     #Dump sim_annealing arch info
     print(f"[CALIBRATION] Dumping Calibration Results csv ...... ") #if print_info else None
@@ -413,7 +708,15 @@ def get_calib_cost_avg(calibration_iterations, config_path, cache, calibration_f
     
     return cost_averages
 
-def run_calibration(wl_idx, cache_file, run_name, cost_profile, calibration_iterations=10000):
+def run_calibration(
+    wl_idx,
+    workload_sequence,
+    cache_file,
+    run_name,
+    cost_profile,
+    calibration_iterations=10000,
+    intermediate_policy="direct_forward",
+):
     
     print(f"[STANDALONE_MODE] Standalone framework mode is enabled")
     input_file_path = "cfg/parameters/input.json"
@@ -448,23 +751,107 @@ def run_calibration(wl_idx, cache_file, run_name, cost_profile, calibration_iter
         calibration_iterations=calibration_iterations,
         config_path=input_file_path,
         cache=cache,
-        calibration_file_path=calibration_file_path 
+        calibration_file_path=calibration_file_path,
+        workload_sequence=workload_sequence,
+        intermediate_policy=intermediate_policy,
     )
     ###################################
     print(f"[CALIBRATION] Calibration is completed")
 ##########################################
 
 
+def run_policy_comparison(
+    wl_idx,
+    workload_sequence,
+    architecture_file,
+    cache_file,
+    run_name,
+    cost_profile,
+):
+    if architecture_file is None:
+        raise ValueError("--architecture_file is required for run_policy_compare")
+    with open(architecture_file) as file:
+        architecture = json.load(file)
+    calibration_file = f"cfg/calibration/calibration_{wl_idx}.json"
+    if not os.path.exists(calibration_file):
+        raise FileNotFoundError(
+            f"Run calibration first; expected {calibration_file}"
+        )
+    with open(calibration_file) as file:
+        cost_averages = json.load(file)
+    expected_identity = calibration_identity(
+        "cfg/parameters/input.json", workload_sequence
+    )
+    if cost_averages.get("_calibration_identity") != expected_identity:
+        raise ValueError(
+            f"Calibration is stale; rerun calibration for workload {wl_idx}"
+        )
+
+    cache = SimulationCache(cache_file, fast_test=fast_test, simulator_dir=run_name)
+    rows = []
+    for policy in (
+        "cold_dram",
+        "ideal_on_chip",
+        "local_sram",
+        "direct_forward",
+    ):
+        objective, normalized, raw = calculate_cost(
+            profile_name=cost_profile,
+            cost_avgerage=cost_averages,
+            system_dict=architecture,
+            cache=cache,
+            workload_sequence=workload_sequence,
+            intermediate_policy=policy,
+        )
+        rows.append({"policy": policy, "objective": objective, **normalized, **raw})
+    cache.dump_cache()
+
+    output_name = run_name or f"wl{wl_idx}_{cost_profile}"
+    output_path = f"reports/intermediate_policy_comparison_{output_name}.csv"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    result = pd.DataFrame(rows)
+    result.to_csv(output_path, index=False)
+    print(result[["policy", "objective", "latency", "energy"]].to_string(index=False))
+    print(f"[INFO] Policy comparison written to {output_path}")
+    return result, output_path
+
+
 
 ##########################################
 ####### Simulated Annealing Function
 
-def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000, freezing_temp=1e-3, max_move_per_temp_step=20,
-                  cooling_rate=0.99, calibration_iterations=200):
+def sim_annealing(
+    wl_idx,
+    workload_sequence,
+    cache_file,
+    run_name,
+    cost_profile,
+    initial_temp=4000,
+    freezing_temp=1e-3,
+    max_move_per_temp_step=20,
+    cooling_rate=0.99,
+    calibration_iterations=200,
+    intermediate_policy="direct_forward",
+    random_seed=None,
+    input_file_path="cfg/parameters/input.json",
+    calibration_file_path=None,
+    initial_architecture=None,
+):
+    if initial_temp <= 0:
+        raise ValueError("initial_temp must be positive")
+    if freezing_temp <= 0 or freezing_temp >= initial_temp:
+        raise ValueError("freezing_temp must be positive and below initial_temp")
+    if max_move_per_temp_step <= 0:
+        raise ValueError("max_move_per_temp_step must be positive")
+    if not 0 < cooling_rate < 1:
+        raise ValueError("cooling_rate must be between 0 and 1")
+    if random_seed is not None:
+        random.seed(random_seed)
     
     print(f"[STANDALONE_MODE] Standalone framework mode is enabled")
-    input_file_path = "cfg/parameters/input.json"
-    calibration_file_path = f"cfg/calibration/calibration_{wl_idx}.json"
+    calibration_file_path = calibration_file_path or (
+        f"cfg/calibration/calibration_{wl_idx}.json"
+    )
     print(f"[STANDALONE_MODE] Input file path is {input_file_path}")
     print(f"[STANDALONE_MODE] Calibration file path is {calibration_file_path}")
 
@@ -495,13 +882,24 @@ def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000,
         calibration_iterations=calibration_iterations,
         config_path=input_file_path,
         cache=cache,
-        calibration_file_path=calibration_file_path 
+        calibration_file_path=calibration_file_path,
+        workload_sequence=workload_sequence,
+        intermediate_policy=intermediate_policy,
     )
     ###################################
+
+    # Calibration may be loaded or generated. Reset here so that cache state does
+    # not alter seeded initial generation or the annealing trajectory.
+    if random_seed is not None:
+        random.seed(random_seed)
     
     
     # Use the new top-level function to generate the architecture
-    cur_architecture = gen_initial_arch(config_path=input_file_path,stack_diff_size=True)
+    cur_architecture = (
+        copy.deepcopy(initial_architecture)
+        if initial_architecture is not None
+        else gen_initial_arch(config_path=input_file_path, stack_diff_size=True)
+    )
     
     if cur_architecture:
         #write_solution_to_json(cur_architecture,'cfg/gen_arch/initial-arch.json')
@@ -517,7 +915,9 @@ def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000,
         profile_name=cost_profile,
         cost_avgerage=cost_avg,
         system_dict=cur_architecture,
-        cache=cache
+        cache=cache,
+        workload_sequence=workload_sequence,
+        intermediate_policy=intermediate_policy,
         )
     
     #Debug
@@ -527,8 +927,10 @@ def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000,
         print(f"[INFO] Normalized cost dict is {norm_cost_dict}")
         print(f"[INFO] Raw cost dict is {raw_cost_dict}")
     
-    #Assign initial cost_val as the best cost at the start of sim_annelaing 
+    # Track the accepted annealing state separately from the global best.
+    current_cost = cost_val
     best_cost = cost_val
+    best_architecture = copy.deepcopy(cur_architecture)
     
     temperature = initial_temp
     
@@ -630,12 +1032,14 @@ def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000,
                                                     profile_name=cost_profile,
                                                     cost_avgerage=cost_avg,
                                                     system_dict=new_architecture,
-                                                    cache=cache
+                                                    cache=cache,
+                                                    workload_sequence=workload_sequence,
+                                                    intermediate_policy=intermediate_policy,
                 )
-                print(f"\n[INFO] The new cost is {new_cost_val} and current cost is {best_cost}") if print_info else None
+                print(f"\n[INFO] The new cost is {new_cost_val} and current cost is {current_cost}") if print_info else None
             
                 #Calcualte the cost delta
-                cost_diff = new_cost_val - best_cost
+                cost_diff = new_cost_val - current_cost
             
                 #Move accepet check 
                 move_accepted, move_type = accept_move_func(cost_diff=cost_diff, temp=temperature)
@@ -647,9 +1051,11 @@ def sim_annealing(wl_idx, cache_file, run_name, cost_profile, initial_temp=4000,
                         print(f"[INFO] ## Move is accepted due to probabilistically - move_type {move_type}") if print_info else None
                     if move_type==3:
                         print(f"[INFO] ## Move is rejected") if print_info else None
-                    best_architecture = new_architecture
                     cur_architecture = new_architecture #Update the current architecture to the new one
-                    best_cost = new_cost_val
+                    current_cost = new_cost_val
+                    if new_cost_val < best_cost:
+                        best_architecture = copy.deepcopy(new_architecture)
+                        best_cost = new_cost_val
                 else:
                     print(f"[INFO] ## Move is rejected ##") if print_info else None
                     print(f"[INFO] ## Move type is {move_type}") if print_info else None
@@ -701,8 +1107,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workload", type=int, choices=[i+1 for i in range(len(GEMM_SHAPE))], 
-                        help = "workload index to retrieve GEMM shapes from encoded list")
+    parser.add_argument("--workload", type=int, choices=sorted(WORKLOAD_CONFIGS),
+                        help = "workload index to retrieve an ordered GEMM sequence")
     parser.add_argument("--iteration", type = int, default=1,
                         help="Number of iterations running, default is 1")
     parser.add_argument("--run_name", type = str, default=None,
@@ -711,9 +1117,27 @@ if __name__ == "__main__":
                         help="Cache file used to accelerate the simulation")
     parser.add_argument("--cost_profile", type = str, default="t1",
                         help="Cost profiles used to calculate cost in SimAnnelaing. Options - t1, t2, t3, t4")
+    parser.add_argument(
+        "--intermediate_policy",
+        choices=sorted(INTERMEDIATE_POLICIES),
+        default="direct_forward",
+        help="How sequential GEMM intermediates are transferred",
+    )
+    parser.add_argument(
+        "--architecture_file",
+        type=str,
+        default=None,
+        help="Fixed architecture JSON used by run_policy_compare",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for reproducible calibration and simulated-annealing randomness",
+    )
 
     parser.add_argument("--run_mode", type = str, default="run_sim_anneal",
-                        help="run_mode to select type of sim to run. Options- run_sim_anneal, run_exhaustive_dse, run_dbg_check_mutations, run_dbg_find_cost")
+                        help="Options: run_sim_anneal, run_calibration, run_policy_compare")
     #parser.add_argument("--json_file_path", type = str, default=None,
     #                    help="Path to the JSON file for debugging purposes, default is script/analysis_dir/json_out/example.json")
 
@@ -730,6 +1154,9 @@ if __name__ == "__main__":
     cache_file = args.cache_file
     cost_profile = args.cost_profile
     run_mode = args.run_mode
+    intermediate_policy = args.intermediate_policy
+    architecture_file = args.architecture_file
+    seed = args.seed
     #json_file_path = args.json_file_path
 
     if wl_idx is None:
@@ -739,23 +1166,37 @@ if __name__ == "__main__":
         wl_idx = 1
     
 
-    shape = GEMM_SHAPE[wl_idx]
-    GEMM_M = shape[0]
-    GEMM_K = shape[1]
-    GEMM_N = shape[2]
+    workload_sequence = parse_workload_entry(wl_idx, WORKLOAD_CONFIGS[wl_idx])
+    print(
+        f"[INFO] Workload sequence: {workload_sequence['name']} "
+        f"({len(workload_sequence['gemms'])} GEMM(s))"
+    )
 
     file_run_name = f"wl{wl_idx}_{iteration}iteration_{run_name}_{cost_profile}"
+    if intermediate_policy != "direct_forward":
+        file_run_name += f"_{intermediate_policy}"
     
     print(f"[INFO] Run name: {file_run_name}, cache_file: {cache_file}, Iteration: {iteration}")
     
-    cache = SimulationCache(cache_file)
+    if run_mode == "run_policy_compare":
+        run_policy_comparison(
+            wl_idx=wl_idx,
+            workload_sequence=workload_sequence,
+            architecture_file=architecture_file,
+            cache_file=cache_file,
+            run_name=file_run_name,
+            cost_profile=cost_profile,
+        )
+        sys.exit(0)
     #################
 
     for i in range(iteration):
+        iteration_seed = None if seed is None else seed + i
         if run_mode == "run_sim_anneal": #Runs Simulated Annealing
             start_time = time.time()
             best_cost, best_arch, sa_details_csv, sim_results_csv = sim_annealing(
                                                                 wl_idx=wl_idx,
+                                                                workload_sequence=workload_sequence,
                                                                 cache_file = cache_file,
                                                                 run_name=file_run_name,
                                                                 cost_profile=cost_profile,
@@ -763,7 +1204,9 @@ if __name__ == "__main__":
                                                                 freezing_temp=1e-3, 
                                                                 max_move_per_temp_step=5, #20
                                                                 cooling_rate=0.3,
-                                                                calibration_iterations=10
+                                                                calibration_iterations=10,
+                                                                intermediate_policy=intermediate_policy,
+                                                                random_seed=iteration_seed,
                                                                 )
             
             dump_results(sa_details_csv, sim_results_csv, best_arch, best_cost, file_run_name)
@@ -776,12 +1219,16 @@ if __name__ == "__main__":
             calibration_iterations = 10
             print(f"[INFO] Running calibration for {calibration_iterations} iterations to get variation data")
             
+            if iteration_seed is not None:
+                random.seed(iteration_seed)
             run_calibration(
                 wl_idx=wl_idx,
+                workload_sequence=workload_sequence,
                 cache_file=cache_file,
                 run_name=file_run_name,
                 cost_profile=cost_profile,
-                calibration_iterations=calibration_iterations 
+                calibration_iterations=calibration_iterations,
+                intermediate_policy=intermediate_policy,
             )
             
             end_time = time.time()

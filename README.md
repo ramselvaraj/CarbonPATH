@@ -95,7 +95,7 @@ chiplet/carbon_model/arch_params/
 ```
 Users can input different parameters of their choice by modifying the above parameter files. CarbonPATH models the overall HI-system's area, power, energy, cost, embodied CFP, operational CFP, and cycle-accurate latency using data from the above JSON files. 
 
-CarbonPATH also supports multiple optimization templates: ```t1, t2, t3, and t4``` ([cost_profiles.json](./cfg/parameters/cost_profiles.json)). Users can additionally customize the weight of various metrics according to their preferences.
+CarbonPATH also supports multiple optimization templates: ```t1, t2, t3, and t4``` ([cost_profiles.json](./cfg/parameters/cost_profiles.json)). Users can additionally customize the weight of various metrics according to their preferences. Embodied and operational carbon are still calculated and reported, but their profile coefficients are currently set to zero, so they do not affect the optimization score.
 
 ### Calibration
 Since the metrics used by CarbonPATH have different units and scales, normalization is necessary to prevent any single term from dominating the SA-Cost function. The files below contain an example calibration.json for all the six different workloads used in the paper. 
@@ -112,22 +112,175 @@ Command to run calibration on a particular workload is shown below, by default i
 ```
 make calibration WORKLOAD=5 
 ```
-**NOTE**: Please ensure the old cfg/calibration_*.json is deleted prior to running new calibration.  
+Calibration files include a model/search-space/workload identity. CarbonPATH automatically regenerates legacy or stale workload calibrations instead of normalizing new results with incompatible statistics.
 
 ### Simulation cache 
 CarbonPATH computes cycle-accurate latency for the AI workloads it runs, which can be time-intensive. To address this, we implemented a lookup table–based simulation cache that dynamically stores key parameters such as systolic array size, workload shape, memory bandwidth, SRAM size, data flow, and the computed cycle count.
-During the simulated annealing algorithm, the simulator is invoked only if a cache miss occurs (i.e., a configuration has not been encountered before). This approach significantly speeds up the computation. Additionally, the simulation cache is configured to automatically update on a miss, enabling faster execution for subsequent runs.
+During the simulated annealing algorithm, the simulator is invoked only if a cache miss occurs (i.e., a configuration has not been encountered before). This approach significantly speeds up the computation. Additionally, the simulation cache is configured to automatically update on a miss, enabling faster execution for subsequent runs. Cache rows carry a simulation-model version; legacy rows remain readable but are not reused by the current model.
 
 
 ## Running Carbon-PATH
 There are multiple ways CarbonPATH can be launched. CarbonPATH does an extensive design space exploration, and since the search space is vast, run times vary based on the workload. 
 
-#### Include new GEMM workload
-To run on a new GEMM workload update the [workload.json](./cfg/examples/workload.json) and use the provided workload number in the commands below. The [workload.json](./cfg/examples/workload.json) is in M, K, N format as shown below: 
+#### Evaluate a sequential neural network
+
+`network.py` provides a user-facing interface for fixed-architecture neural
+network evaluation. The initial schema supports sequential `int8` linear layers
+only; activations, normalization, branching, residuals, convolution, and
+architecture optimization are not yet supported.
+
+Users specify the input dimensions and each layer's output feature count rather
+than writing GEMM dimensions directly:
+
+```json
+{
+  "schema_version": 1,
+  "name": "four_layer_mlp",
+  "dtype": "int8",
+  "input": {"batch_size": 128, "features": 128},
+  "layers": [
+    {"name": "fc1", "op": "linear", "out_features": 128},
+    {"name": "fc2", "op": "linear", "out_features": 128},
+    {"name": "fc3", "op": "linear", "out_features": 128},
+    {"name": "classifier", "op": "linear", "out_features": 128}
+  ],
+  "memory": {"intermediate_policy": "direct_forward"}
+}
 ```
+
+For batch size `M`, input features `K`, and output features `N`, each linear
+layer compiles to GEMM `[M, K, N]`; its `N` becomes the next layer's `K`.
+`cfg/examples/mlp_network.json` is numerically equivalent to legacy workload 8.
+
+Validate a network without running a simulation:
+
+```bash
+.venv/bin/python -m network validate \
+  --network cfg/examples/mlp_network.json
+```
+
+Evaluate it on an existing architecture:
+
+```bash
+.venv/bin/python -m network evaluate \
+  --network cfg/examples/mlp_network.json \
+  --architecture cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --memory-policy local_sram \
+  --output-dir reports/networks/four_layer_mlp/evaluate_local
+```
+
+Compare all explicit policies on the same architecture:
+
+```bash
+.venv/bin/python -m network compare-memory \
+  --network cfg/examples/mlp_network.json \
+  --architecture cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --output-dir reports/networks/four_layer_mlp/compare_memory
+```
+
+Add `--calibration PATH --cost-profile t1` to `evaluate` or
+`compare-memory` to calculate normalized cost/carbon results. The calibration
+must match the network, intermediate policy, and current search space. Create
+one with:
+
+```bash
+.venv/bin/python -m network calibrate \
+  --network cfg/examples/mlp_network.json \
+  --samples 10000
+```
+
+Network calibrations are written to
+`cfg/calibration/networks/<network>-<fingerprint>.json`. A fixed evaluation
+writes `summary.json`, `layers.csv`, `boundaries.csv`, `mapping.csv`, and
+`report.md`. A memory comparison writes `summary.json`, `policy_comparison.csv`,
+and `report.md`.
+
+#### Run optimizer experiments
+
+Run deterministic replay, the exhaustive reduced-space benchmark, full-space
+multi-start searches, and the supported linear-DNN demonstrations as a module:
+
+```bash
+.venv/bin/python -m script.run_optimizer_experiments \
+  --output-dir reports/optimizer_experiments/results_validated \
+  --reduced-runs 20 \
+  --full-runs 5 \
+  --calibration-samples 10
+```
+
+The runner rejects a non-empty output directory. It creates a version-filtered,
+output-local simulation cache, fresh workload calibrations, a source/input hash
+manifest, raw traces, CSV summaries, architecture JSON files, and `report.md`.
+Use module invocation (`-m`); direct execution from `script/` is not supported.
+
+#### Include new GEMM workload
+To run on a new GEMM workload, update [workload.json](./cfg/examples/workload.json) and use its workload number in the commands below. A single GEMM uses the legacy M, K, N format:
+```json
 "1": [128, 2048, 1000],
 ```
 Here for workload 1, we have M=128, K=2048, and N=1000
+
+An ordered sequence contains at least two GEMMs and uses the canonical form below:
+
+```json
+"7": {
+  "name": "two_gemm_demo",
+  "gemms": [
+    {"name": "projection", "shape": [128, 256, 512]},
+    {"name": "classifier", "shape": [128, 512, 64]}
+  ]
+}
+```
+
+Sequences execute strictly in order. Each GEMM receives a fresh scheduler and system state while sharing the architecture and simulation cache. Adjacent GEMMs must have the same M dimension and the next K dimension must equal the previous N dimension. Sequence latency and energy are summed before normalization and scoring. Workload 8 provides four identical chained GEMMs for linear-scaling validation.
+
+The `--intermediate_policy` option controls each internal GEMM boundary:
+
+- `cold_dram` writes the producer output to DRAM and reads it for the consumer.
+- `ideal_on_chip` removes internal transfer latency and energy as an upper-bound experiment.
+- `local_sram` retains data only when producer and consumer placement is on the same core and the intermediate fits its SRAM; otherwise the whole boundary falls back to DRAM.
+- `direct_forward` is the default. It retains same-core slices and routes remote slices over the architecture's existing chiplet links; an infeasible boundary falls back to DRAM.
+
+The first GEMM input and final GEMM output always use DRAM. Intermediate byte accounting enforces `retained + forwarded + DRAM-spilled = intermediate bytes` at every boundary.
+
+Run all policies on one fixed architecture and write a comparison CSV:
+
+```bash
+python -m main --workload 8 --cost_profile t1 \
+  --run_mode run_policy_compare \
+  --architecture_file cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --run_name policy_comparison
+```
+
+Run annealing with one policy by adding, for example, `--intermediate_policy local_sram` to the normal command.
+
+#### Validate SRAM capacity fallback
+
+Run the deterministic capacity experiment to compare expected and measured latency and energy with real SCALE-Sim execution:
+
+```bash
+.venv/bin/python script/validate_intermediate_memory_capacity.py
+```
+
+The validation uses one supported 64x64 core with a nominal 256 KiB policy capacity and two nearly identical two-GEMM sequences:
+
+```text
+Exact fit: [512, 64, 512] -> [512, 512, 64]
+           intermediate = 262,144 bytes
+
+Overflow:  [512, 64, 513] -> [512, 513, 64]
+           intermediate = 262,656 bytes
+```
+
+The exact-fit case must select local SRAM and match ideal-on-chip latency. The 512-byte overflow must select cold DRAM, report the capacity fallback reason, and match the cold baseline. By default the command creates an empty temporary cache, forcing all four unique GEMMs through SCALE-Sim. Pass `--cache-file PATH` only when cached execution is desired.
+
+Expected sequence values use each case's measured cold run as the compute baseline and independently calculate the boundary DRAM delta. The experiment validates CarbonPATH's policy threshold and accounting; it does not establish absolute hardware accuracy or model simultaneous occupation by activations, weights, and outputs. The command exits unsuccessfully if selected methods, exact byte placement, fallback reasons, latency, or energy disagree with their predictions. It writes:
+
+```text
+reports/intermediate_capacity_validation.csv
+reports/intermediate_capacity_validation.md
+reports/figures/intermediate_capacity_validation.png
+```
 
 #### Single workload commands
 CarbonPATH provides a Makefile that allows users to launch the framework across multiple workloads.
@@ -191,7 +344,7 @@ cfg/gen_arch/wl5_1iteration__t2/
 ```
 The best_arch_wl5*.json is the file that gives the best optimzied HI-system architecture. More details about it explained below. 
 
-The sa_arch_.csv and sa_metrics_*.csv are data is generated for each iterations in simualted annealing algorithm, it contains all the metric for SA-Cost and also has the architecture information. 
+The sa_arch_.csv and sa_metrics_*.csv are data generated for each iteration in the simulated annealing algorithm. The metrics CSV contains sequence totals, per-GEMM latency and energy fields, and per-boundary selected method, byte placement, route, transfer latency, transfer energy, and fallback reason. Fixed-architecture comparisons are written under `reports/intermediate_policy_comparison_*.csv`; deterministic fit/overflow measurements are written to `reports/intermediate_capacity_validation.csv`.
 
 ##### Architecture file best_arch*.json 
 This file is generated upon completion of CarbonPATH’s design space exploration. It captures the best-performing architecture, optimized for the given workload under the specified optimization profile. It is structured as below: 

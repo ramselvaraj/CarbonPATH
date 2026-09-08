@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "bottleneck_mlp",
+  "dtype": "int8",
+  "input": {"batch_size": 128, "features": 1024},
+  "layers": [
+    {"name": "compress", "op": "linear", "out_features": 256},
+    {"name": "expand", "op": "linear", "out_features": 1024}
+  ],
+  "memory": {"intermediate_policy": "cold_dram"}
+}

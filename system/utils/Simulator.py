@@ -36,11 +36,33 @@ class Simulator:
             "OfmapOffset:    20000000",
             f"Bandwidth : {int(sa.dram_bandwidth)}",
             f"Dataflow : {sa.data_flow}",
-            "MemoryBanks:    1"
+            "MemoryBanks:    1",
+            "ReadRequestBuffer: 32",
+            "WriteRequestBuffer: 32"
+        ]
+        layout = [
+            "[layout]",
+            "IfmapCustomLayout: False",
+            "IfmapSRAMBankBandwidth: 10",
+            "IfmapSRAMBankNum: 10",
+            "IfmapSRAMBankPort: 2",
+            "FilterCustomLayout: False",
+            "FilterSRAMBankBandwidth: 10",
+            "FilterSRAMBankNum: 10",
+            "FilterSRAMBankPort: 2"
+        ]
+        sparsity = [
+            "[sparsity]",
+            "SparsitySupport: False",
+            "SparseRep: ellpack_block",
+            "OptimizedMapping: False",
+            "BlockSize: 8",
+            "RandomNumberGeneratorSeed: 40"
         ]
         run_presets = [
             "[run_presets]",
-            f"InterfaceBandwidth: {self.mode}"
+            f"InterfaceBandwidth: {self.mode}",
+            "UseRamulatorTrace: False"
         ]
 
         # Combine all lines with appropriate spacing
@@ -49,6 +71,10 @@ class Simulator:
         lines.append('')  # Empty line between sections
         lines.extend(architecture_presets)
         lines.append('')  # Empty line between sections
+        lines.extend(layout)
+        lines.append('')
+        lines.extend(sparsity)
+        lines.append('')
         lines.extend(run_presets)
         
         # Write to file
@@ -106,6 +132,31 @@ class Simulator:
 
         return path, run_name
 
+    def write_core_layout(self, core: SystolicArray) -> tuple[str, str]:
+        run_name = f'Core{core.id}_{core.width}_{core.height}'
+        path = os.path.join(self.home_dir, run_name, run_name + '_layout.csv')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        header = (
+            'Layer name,IFMAP Height Intraline Factor,IFMAP Width Intraline Factor,'
+            'Filter Height Intraline Factor,Filter Width Intraline Factor,'
+            'Channel Intraline Factor,Num Filter Intraline Factor,'
+            'IFMAP Height Intraline Order,IFMAP Width Intraline Order,'
+            'Channel Intraline Order,IFMAP Height Interline Order,'
+            'IFMAP Width Interline Order,Channel Interline Order,'
+            'Num Filter Intraline Order,Channel Intraline Order,'
+            'Filter Height Intraline Order,Filter Width Intraline Order,'
+            'Num Filter Interline Order,Channel Interline Order,'
+            'Filter Height Interline Order,Filter Width Interline Order,\n'
+        )
+        default_layout = '1,1,1,1,1,1,1,2,0,4,5,3,3,0,1,2,7,4,5,6,'
+        with open(path, 'w') as f:
+            f.write(header)
+            for index in range(len(core.workloads)):
+                f.write(f'Layer{index + 1},{default_layout}\n')
+
+        return path, run_name
+
     def simulate_all_cores(self):
 
         compute_latency = dict()
@@ -124,9 +175,11 @@ class Simulator:
         workload_path, workload_file = workload_return 
         
         config_path, config_name = self.write_config_file(core)
+        layout_path, _ = self.write_core_layout(core)
         # sim_folder = os.path.join(self.home_dir, config_name)
         s = scalesim(config=config_path, 
                      topology=workload_path, 
+                     layout=layout_path,
                      input_type_gemm=True,
                      verbose=False,
                      save_disk_space=True)

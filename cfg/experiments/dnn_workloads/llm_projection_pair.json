@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "llm_projection_pair",
+  "dtype": "int8",
+  "input": {"batch_size": 64, "features": 4096},
+  "layers": [
+    {"name": "projection_1", "op": "linear", "out_features": 4096},
+    {"name": "projection_2", "op": "linear", "out_features": 4096}
+  ],
+  "memory": {"intermediate_policy": "cold_dram"}
+}

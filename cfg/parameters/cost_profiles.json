@@ -4,31 +4,31 @@
     "perf_coeff": 1,
     "area_coeff": 1,
     "cost_coeff": 1,
-    "embc_coeff": 1,
-    "opec_coeff": 1
+    "embc_coeff": 0,
+    "opec_coeff": 0
   },
     "t2": {
     "energy_coff": 0.8,
     "perf_coeff": 0.1,
     "area_coeff": 0.2,
     "cost_coeff": 0.1,
-    "embc_coeff": 0.2,
-    "opec_coeff": 0.7
+    "embc_coeff": 0,
+    "opec_coeff": 0
   },
   "t3": {
     "energy_coff": 0.1,
     "perf_coeff": 0.7,
     "area_coeff": 0.1,
     "cost_coeff": 0.7,
-    "embc_coeff": 0.1,
-    "opec_coeff": 0.1
+    "embc_coeff": 0,
+    "opec_coeff": 0
   },
   "t4": {
     "energy_coff": 0.6,
     "perf_coeff": 0.1,
     "area_coeff": 0.6,
     "cost_coeff": 0.1,
-    "embc_coeff": 0.6,
-    "opec_coeff": 0.6
+    "embc_coeff": 0,
+    "opec_coeff": 0
   }
 }

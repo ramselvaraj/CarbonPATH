@@ -1,6 +1,7 @@
 # Makefile
 
 PYTHON := python -m main
+TEST_PYTHON ?= .venv/bin/python
 
 # Default values (can be overridden on command line)
 WORKLOAD ?= 1
@@ -18,6 +19,9 @@ sim_anneal:
 calibration:
 	$(MAKE) run WORKLOAD=$(WORKLOAD) RUN_MODE=run_calibration
 
+test:
+	$(TEST_PYTHON) -m unittest discover -s tests -v
+
 clean_calibration:
 	python script/clean_calibration.py 
 
@@ -32,4 +36,3 @@ parallel_carbonpath:
 clean_all:
 	rm log_wl*.log job_s*.log
 	rm -rf wl*_carbon_path*
-

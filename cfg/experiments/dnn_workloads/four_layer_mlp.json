@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "four_layer_mlp",
+  "dtype": "int8",
+  "input": {"batch_size": 128, "features": 128},
+  "layers": [
+    {"name": "fc1", "op": "linear", "out_features": 128},
+    {"name": "fc2", "op": "linear", "out_features": 128},
+    {"name": "fc3", "op": "linear", "out_features": 128},
+    {"name": "classifier", "op": "linear", "out_features": 128}
+  ],
+  "memory": {"intermediate_policy": "cold_dram"}
+}

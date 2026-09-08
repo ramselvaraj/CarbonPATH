@@ -9,6 +9,9 @@ import numpy as np
 
 from pathlib import Path
 
+
+SIMULATION_MODEL_VERSION = 2
+
 # Find project root by walking up until we see the sentinel file/folder, e.g. `.git` or `cfg`
 def find_repo_root(start: Path, sentinel: str = "cfg") -> Path:
     for parent in [start, *start.parents]:
@@ -42,7 +45,10 @@ class SimulationCache:
             self.simulator_dir = simulator_dir
 
         cache = pd.read_csv(self.dir, dtype=self.dtype_dict)
-        self.index_cols = ['core_size', 'data_flow', 'bandwidth', 'buffer_size', 'M', 'K', 'N']
+        if 'model_version' not in cache:
+            cache['model_version'] = 1
+        cache['model_version'] = cache['model_version'].astype(int)
+        self.index_cols = ['model_version', 'core_size', 'data_flow', 'bandwidth', 'buffer_size', 'M', 'K', 'N']
         cache.set_index(self.index_cols, inplace=True)
 
         # deduplicate
@@ -68,7 +74,7 @@ class SimulationCache:
 
         # Make tuple keys for each workload
         lookup_keys = [
-            (core.width, core.data_flow, core.dram_bandwidth, core.buffer_size, wl.m, wl.k, wl.n)
+            (SIMULATION_MODEL_VERSION, core.width, core.data_flow, core.dram_bandwidth, core.buffer_size, wl.m, wl.k, wl.n)
             for wl in core.workloads
         ]
         
@@ -95,11 +101,8 @@ class SimulationCache:
         
         wl_to_simulate = [(i, wl) for i, (wl, need) in enumerate(zip(core.workloads, to_sim_mask)) if need]
 
-        simulated_cycles = self.__single_core_simulation_with_cache(core, wl_to_simulate)
-
-        core.total_cycle += simulated_cycles
-
-
+        self.__single_core_simulation_with_cache(core, wl_to_simulate)
+        core.total_cycle = sum(core.cycle_per_layer)
         return core.total_cycle
     
 
@@ -135,10 +138,8 @@ class SimulationCache:
             )
         total_latency = simulator.simulate_single_core(buffer_core)
         
-        if self.fast_test:
-            return total_latency
-        
-        self.__update_cache(buffer_core)
+        if not self.fast_test:
+            self.__update_cache(buffer_core)
         count = 0
         for indices, cycle in zip(unique_workload.values(), buffer_core.cycle_per_layer):
             assert cycle is not None and cycle > 0, f"[ERROR] Cycle is {cycle} at buffer_core for GEMM {wl}"
@@ -150,8 +151,7 @@ class SimulationCache:
         assert count == sum([len(idx) for idx in unique_workload.values()]), \
             f"[ERROR] num of cycle assignment should equal to num of assigned GEMMs, {len(wl_to_simulate)} GEMMs assigned, but only {count} cycle assignment performed"
 
-        #return sum(core.cycle_per_layer)
-        return sum(buffer_core.cycle_per_layer)
+        return sum(core.cycle_per_layer)
 
     def __update_cache(self, core: SystolicArray) -> None:
         """
@@ -164,6 +164,7 @@ class SimulationCache:
         holder['latency'] = core.cycle_per_layer
         holder['buffer_size'] = [core.buffer_size] * len(wl_shapes)
         holder['bandwidth'] = [core.dram_bandwidth] * len(wl_shapes)
+        holder['model_version'] = [SIMULATION_MODEL_VERSION] * len(wl_shapes)
 
         holder = holder.drop_duplicates()
         
@@ -221,5 +222,3 @@ class SimulationCache:
         self.cache_df = self.cache_df.astype(self.dtype_dict)
         self.cache_df.to_csv(self.dir, index=False)
         
-
-

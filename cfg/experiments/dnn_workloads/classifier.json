@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "name": "classifier",
+  "dtype": "int8",
+  "input": {"batch_size": 128, "features": 2048},
+  "layers": [
+    {"name": "classifier", "op": "linear", "out_features": 1000}
+  ],
+  "memory": {"intermediate_policy": "cold_dram"}
+}
