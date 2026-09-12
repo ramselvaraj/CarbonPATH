@@ -170,6 +170,15 @@ class IntermediateCapacityValidationTests(unittest.TestCase):
         direct_rows = results[results["policy"] == "direct_forward"]
         self.assertEqual(direct_rows["forwarding_latency_ns"].nunique(), 4)
         self.assertEqual(direct_rows["forwarding_energy_pj"].nunique(), 4)
+        self.assertIn("boundary_1_latency_ns", results.columns)
+        self.assertIn("boundary_2_latency_ns", results.columns)
+        self.assertTrue((direct_rows["boundary_2_latency_ns"] == 0).all())
+        active_direct = direct_rows.set_index("architecture").loc[
+            "2.5d_active_ucie_adv"
+        ]
+        self.assertAlmostEqual(
+            active_direct["boundary_1_latency_ns"], 14.794964521535569
+        )
 
 
 if __name__ == "__main__":

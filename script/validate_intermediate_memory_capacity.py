@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import sys
 import tempfile
@@ -216,6 +217,38 @@ def _expected_byte_placement(selected_method, intermediate_bytes):
         "spilled": 0,
         "dram_traffic": 0,
     }
+
+
+def _expected_forwarding_metrics(architecture):
+    """Calculate forwarding metrics independently from d2d_bw_calc()."""
+    connection = architecture["pkg"]["inter_pkg_conn"][0]
+    connection_type = connection["connection_type"]
+    is_3d = connection_type.startswith("3d_")
+    protocol = (
+        architecture["pkg"]["protocol_3d"]
+        if is_3d
+        else architecture["pkg"]["protocol_2.5d"]
+    )
+    with (REPO_ROOT / "cfg/parameters/d2d_input.json").open() as file:
+        d2d_data = json.load(file)
+    with (REPO_ROOT / "cfg/parameters/energy_eff.json").open() as file:
+        energy_data = json.load(file)
+
+    pitch_mm = d2d_data["D2D_pitch_pkg"][connection_type] / 1000.0
+    sram_area, _ = get_sram_area_energy(SRAM_KIB, "7")
+    area = architecture["Chiplet_1"]["area"] - sram_area
+    connections = area / pitch_mm**2 if is_3d else math.sqrt(area) / pitch_mm
+    bandwidth_gbps = (
+        connections
+        * d2d_data["D2D_RATES_BY_NODE"][protocol]["7"]
+        * d2d_data["eff_protocol"][protocol]
+        / 8
+    )
+    forwarded_bytes = 2048
+    return (
+        forwarded_bytes / bandwidth_gbps,
+        forwarded_bytes * 8 * energy_data["Die2Die_pj_per_bit"][protocol],
+    )
 
 
 def _error_percent(actual, expected):
@@ -475,12 +508,6 @@ def run_policy_architecture_validation(cache, tolerance=1e-9):
             ("local_sram", 1024, 0, 0, 0),
         ),
     }
-    expected_forwarding = {
-        "2.5d_rdl_ucie": (946.8777293782764, 8192.0),
-        "2.5d_emib_bow": (473.4388646891382, 12288.0),
-        "2.5d_active_ucie_adv": (236.7194323445691, 4096.0),
-        "3d_hybrid_bond": (0.07004511206191878, 81.92),
-    }
     rows = []
 
     for architecture_name, architecture in build_policy_validation_architectures().items():
@@ -540,9 +567,9 @@ def run_policy_architecture_validation(cache, tolerance=1e-9):
             else architecture["pkg"]["protocol_2.5d"]
         )
         cold_latency, cold_communication, _, _, cold_plans = measurements["cold_dram"]
-        expected_forwarding_latency, expected_forwarding_energy = expected_forwarding[
-            architecture_name
-        ]
+        expected_forwarding_latency, expected_forwarding_energy = (
+            _expected_forwarding_metrics(architecture)
+        )
 
         for policy in policies:
             latency, communication, sram, _, plans = measurements[policy]
@@ -610,8 +637,7 @@ def run_policy_architecture_validation(cache, tolerance=1e-9):
                 rel_tol=tolerance,
                 abs_tol=tolerance,
             )
-            rows.append(
-                {
+            row = {
                     "architecture": architecture_name,
                     "connection_type": connection["connection_type"],
                     "protocol": protocol,
@@ -659,7 +685,24 @@ def run_policy_architecture_validation(cache, tolerance=1e-9):
                         and forwarding_oracle_matches
                     ),
                 }
-            )
+            for plan in plans:
+                prefix = f"boundary_{plan.boundary_index}"
+                row.update(
+                    {
+                        f"{prefix}_selected_method": plan.selected_method,
+                        f"{prefix}_intermediate_bytes": plan.intermediate_bytes,
+                        f"{prefix}_retained_bytes": plan.retained_bytes,
+                        f"{prefix}_forwarded_bytes": plan.forwarded_bytes,
+                        f"{prefix}_dram_spilled_bytes": plan.dram_spilled_bytes,
+                        f"{prefix}_dram_traffic_bytes": plan.dram_traffic_bytes,
+                        f"{prefix}_latency_ns": plan.latency_ns,
+                        f"{prefix}_energy_pj": plan.energy_pj,
+                        f"{prefix}_routes": ";".join(
+                            "->".join(map(str, route)) for route in plan.routes
+                        ),
+                    }
+                )
+            rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -987,12 +1030,14 @@ def write_policy_architecture_report(results, output_path, figure_path, csv_path
         "",
         "## Results",
         "",
-        "| Architecture | Policy | Boundary methods | Retained | Forwarded | DRAM spilled | Latency | Communication energy | Passed |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Architecture | Policy | Boundary methods | B1 latency | B1 energy | B2 latency | B2 energy | Retained | Forwarded | DRAM spilled | Latency | Communication energy | Passed |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in results.itertuples():
         lines.append(
             f"| {row.architecture} | `{row.policy}` | `{row.boundary_methods}` | "
+            f"{row.boundary_1_latency_ns:.6f} ns | {row.boundary_1_energy_pj:.2f} pJ | "
+            f"{row.boundary_2_latency_ns:.6f} ns | {row.boundary_2_energy_pj:.2f} pJ | "
             f"{row.retained_bytes:,} B | {row.forwarded_bytes:,} B | "
             f"{row.dram_spilled_bytes:,} B | {row.latency_ns / 1e3:.6f} us | "
             f"{row.communication_energy_pj / 1e6:.6f} uJ | "

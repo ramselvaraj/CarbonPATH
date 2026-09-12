@@ -1296,8 +1296,10 @@ def d2d_bw_calc(pkg, protocol, area, is_3d, node=7, use_node_based_rate=True):
     D2D_pitch_pkg = data.get("D2D_pitch_pkg", {})  
     
     converted_rates = {}
-    for protocol, node_rates in D2D_RATES_BY_NODE.items():
-        converted_rates[protocol] = {int(node): rate for node, rate in node_rates.items()}
+    for rate_protocol, node_rates in D2D_RATES_BY_NODE.items():
+        converted_rates[rate_protocol] = {
+            int(node): rate for node, rate in node_rates.items()
+        }
     D2D_RATES_BY_NODE = converted_rates
 
     
@@ -1833,4 +1835,3 @@ def build_design_tables(spec: Dict) -> List[Segment]:
     print("[WARN] Unknown HI_pkg_type; emitting single '2d' segment as default") if print_info else None
     segments.append(("2d", base_df, None))
     return segments
-

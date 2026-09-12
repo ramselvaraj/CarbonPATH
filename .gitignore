@@ -14,3 +14,9 @@ cfg/calibration/calibration_7.json
 cfg/calibration/calibration_8.json
 cfg/gen_arch/wl*/
 wl*_1iteration_*/
+
+# Local research materials and generated exports
+._*
+PATH-AI.pdf
+papers/
+asu-vda-lab-carbonpath-8a5edab282632443.txt

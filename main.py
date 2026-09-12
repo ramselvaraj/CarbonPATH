@@ -31,7 +31,7 @@ from chiplet.carbon_model.ECO_chip import find_carbon
 from system.utils.GEMMWorkload import GEMMWorkload
 from system.utils.Scheduler import CHIP2CHIP_TRANSFER, Scheduler
 from system.utils.ChipletSystem import ChipletSystem
-from system.utils.SimulationCache import SIMULATION_MODEL_VERSION, SimulationCache
+from system.utils.SimulationCache import SimulationCache
 from system.utils.IntermediateMemoryPolicy import (
     INTERMEDIATE_POLICIES,
     build_boundary_mapping,
@@ -56,7 +56,7 @@ scaling_factors = {int(k): v for k, v in freq_config['freq_scaling_factors'].ite
 with open("cfg/examples/workload.json") as f:
     workload = json.load(f)
 WORKLOAD_CONFIGS = {int(k): v for k, v in workload.items()}
-CALIBRATION_MODEL_VERSION = SIMULATION_MODEL_VERSION
+CALIBRATION_MODEL_VERSION = 3
 ######
 
 
