@@ -1,5 +1,6 @@
 # Repository-local Python environment
 .venv/
+carbonpath/
 
 # Python bytecode
 __pycache__/
