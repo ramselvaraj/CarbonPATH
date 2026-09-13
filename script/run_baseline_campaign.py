@@ -347,6 +347,7 @@ def _worker(args) -> None:
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError("independent best-architecture evaluation disagrees with search")
     trace = result["trace"]
+    persisted_trace = pd.read_csv(root / "search_trace.csv")
     cutoff = max(1, math.ceil(len(trace) * 0.8))
     early_best = float(trace.iloc[cutoff - 1]["best_cost"])
     improving = trace["best_cost"].diff().fillna(0).lt(-1e-12)
@@ -372,7 +373,7 @@ def _worker(args) -> None:
         "late_improvement": float(result["best_cost"]) < early_best - 1e-12,
         "last_improvement_move": last_improvement,
         "last_improvement_fraction": last_improvement / result["attempted_moves"],
-        "trace_fingerprint": result["trace_fingerprint"],
+        "trace_fingerprint": trace_fingerprint(persisted_trace),
         "runtime_seconds": result["runtime_seconds"],
         "wall_seconds_with_evaluation": time.perf_counter() - started,
         "simulator_calls": result["simulator_calls"],
