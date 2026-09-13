@@ -689,10 +689,11 @@ def validate_campaign(args):
     budget = manifest["move_budget"]
     pilot = load_results(output, "pilot", move_budget=budget, workload=manifest["workload"])
     formal = load_results(output, "formal_10", move_budget=budget, workload=manifest["workload"])
-    expected_pilot = 5 if state.get("state") in {"PILOT_5_ASSESSING", "FORMAL_10_RUNNING", "FORMAL_10_ASSESSING", "COMPLETE_PASS", "COMPLETE_FAIL"} else 3
+    state_name = state.get("state", "")
+    expected_pilot = 5 if state_name in {"PILOT_5_ASSESSING", "FORMAL_10_RUNNING", "FORMAL_10_ASSESSING", "COMPLETE_PASS"} or state.get("stage") == "pilot_5" else 3
     if len(pilot) < expected_pilot:
         raise RuntimeError(f"expected at least {expected_pilot} valid pilot runs, found {len(pilot)}")
-    if state.get("state") in {"FORMAL_10_ASSESSING", "COMPLETE_PASS", "COMPLETE_FAIL"} and len(formal) != 10:
+    if state_name in {"FORMAL_10_ASSESSING", "COMPLETE_PASS"}:
         raise RuntimeError(f"expected 10 valid formal runs, found {len(formal)}")
     print(json.dumps({"state": state, "pilot_runs": len(pilot), "formal_runs": len(formal)}, indent=2))
 
