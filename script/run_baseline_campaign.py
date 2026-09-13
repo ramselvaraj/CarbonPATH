@@ -19,6 +19,7 @@ import pandas as pd
 from main import (
     CALIBRATION_MODEL_VERSION,
     WORKLOAD_CONFIGS,
+    calibration_identity,
     parse_workload_entry,
     validate_calibration,
 )
@@ -100,7 +101,13 @@ def run_dir(output: Path, workload_id: int, run: int) -> Path:
     return output / "runs" / f"workload_{workload_id}" / f"run_{run:02d}"
 
 
-def result_is_valid(path: Path, manifest: dict | None = None) -> bool:
+def result_is_valid(
+    path: Path,
+    manifest: dict | None = None,
+    *,
+    deep=True,
+    verify_artifacts=True,
+) -> bool:
     try:
         result = load_json(path)
         run_root = path.parent
@@ -112,6 +119,12 @@ def result_is_valid(path: Path, manifest: dict | None = None) -> bool:
             "workload_id", "run", "initial_seed", "search_seed", "schedule",
             "best_cost", "verified_best_cost", "best_fingerprint",
             "canonical_best_fingerprint", "trace_fingerprint", "attempted_moves",
+            "invalid_proposal_rate", "late_improvement", "last_improvement_move",
+            "latency", "energy", "area", "dollar", "embCarbon", "opeCarbon",
+            "accepted_moves", "acceptance_rate", "runtime_seconds",
+            "wall_seconds_with_evaluation", "simulator_calls", "git_commit",
+            "calibration_identity", "search_trace_sha256", "architecture_trace_sha256",
+            "best_architecture_sha256", "initial_architecture_sha256",
         }
         if not required.issubset(result) or not all(
             path.exists()
@@ -137,7 +150,32 @@ def result_is_valid(path: Path, manifest: dict | None = None) -> bool:
                 return False
             if result["workload_config_sha256"] != manifest["workload_config_sha256"][str(result["workload_id"])]:
                 return False
+            if result["git_commit"] != manifest["git_commit"]:
+                return False
+            calibration_entry = manifest["calibrations"][str(result["workload_id"])]
+            if result["calibration_identity"] != calibration_entry["identity"]:
+                return False
+            if verify_artifacts:
+                if result["search_trace_sha256"] != sha256(trace_path):
+                    return False
+                if result["architecture_trace_sha256"] != sha256(architecture_trace_path):
+                    return False
+                if result["best_architecture_sha256"] != sha256(architecture_path):
+                    return False
+                if result["initial_architecture_sha256"] != sha256(initial_path):
+                    return False
         if not math.isfinite(float(result["best_cost"])):
+            return False
+        numeric_fields = (
+            "verified_best_cost", "acceptance_rate", "invalid_proposal_rate",
+            "runtime_seconds", "wall_seconds_with_evaluation", "latency", "energy",
+            "area", "dollar", "embCarbon", "opeCarbon",
+        )
+        if any(not math.isfinite(float(result[field])) for field in numeric_fields):
+            return False
+        if not 0 <= float(result["acceptance_rate"]) <= 1:
+            return False
+        if not 0 <= float(result["invalid_proposal_rate"]) <= 1:
             return False
         if not math.isclose(
             float(result["best_cost"]), float(result["verified_best_cost"]),
@@ -145,6 +183,8 @@ def result_is_valid(path: Path, manifest: dict | None = None) -> bool:
             abs_tol=1e-10,
         ):
             return False
+        if not deep:
+            return True
         architecture = load_json(architecture_path)
         initial = load_json(initial_path)
         if result["best_fingerprint"] != architecture_fingerprint(architecture):
@@ -158,10 +198,11 @@ def result_is_valid(path: Path, manifest: dict | None = None) -> bool:
             return False
         if result["trace_fingerprint"] != trace_fingerprint(trace):
             return False
-        temperatures = trace["temperature"].drop_duplicates().tolist()
-        expected_levels = manifest["planned_moves"] // manifest["schedule"]["max_move_per_temp_step"]
-        if len(temperatures) != expected_levels:
-            return False
+        if manifest is not None:
+            temperatures = trace["temperature"].drop_duplicates().tolist()
+            expected_levels = manifest["planned_moves"] // manifest["schedule"]["max_move_per_temp_step"]
+            if len(temperatures) != expected_levels:
+                return False
         if result["initial_fingerprint"] != architecture_fingerprint(initial):
             return False
         return True
@@ -241,14 +282,17 @@ def _worker(args) -> None:
     run = args.run
     root = run_dir(output, workload_id, run)
     result_path = root / "result.json"
-    if result_is_valid(result_path, manifest):
-        return
     expected_initial = manifest["seed_panel"]["initial_seed_base"] + run - 1
     expected_search = manifest["seed_panel"]["search_seed_base"] + run - 1
     if args.initial_seed != expected_initial or args.search_seed != expected_search:
         raise RuntimeError("worker seeds do not match the prepared manifest")
     if sha256(FULL_SEARCH_SPACE) != manifest["search_space_sha256"]:
         raise RuntimeError("search space differs from the prepared manifest")
+    current_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    if current_commit != manifest["git_commit"]:
+        raise RuntimeError("working tree commit differs from the prepared manifest")
     if sha256(output / "base_cache.csv") != manifest["base_cache_sha256"]:
         raise RuntimeError("base cache differs from the prepared manifest")
     workload = parse_workload_entry(workload_id, WORKLOAD_CONFIGS[workload_id])
@@ -259,6 +303,13 @@ def _worker(args) -> None:
         raise RuntimeError("calibration differs from the prepared manifest")
     calibration = load_json(calibration_path)
     validate_calibration(calibration)
+    expected_identity = calibration_identity(FULL_SEARCH_SPACE, workload, INTERMEDIATE_POLICY)
+    if calibration.get("_calibration_identity") != expected_identity:
+        raise RuntimeError("calibration identity differs from the prepared manifest")
+    if manifest["calibrations"][str(workload_id)]["identity"] != expected_identity:
+        raise RuntimeError("manifest calibration identity is stale")
+    if result_is_valid(result_path, manifest):
+        return
     root.mkdir(parents=True, exist_ok=True)
     initial_path = root / "initial_architecture.json"
     initial = (
@@ -295,6 +346,13 @@ def _worker(args) -> None:
     )
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError("independent best-architecture evaluation disagrees with search")
+    trace = result["trace"]
+    cutoff = max(1, math.ceil(len(trace) * 0.8))
+    early_best = float(trace.iloc[cutoff - 1]["best_cost"])
+    improving = trace["best_cost"].diff().fillna(0).lt(-1e-12)
+    last_improvement = (
+        int(trace.loc[improving, "SA_run_loop"].max()) if improving.any() else 0
+    )
     row = {
         "campaign_type": manifest["campaign_type"],
         "workload_id": workload_id,
@@ -310,13 +368,29 @@ def _worker(args) -> None:
         "attempted_moves": int(result["attempted_moves"]),
         "accepted_moves": int(result["accepted_moves"]),
         "acceptance_rate": result["accepted_moves"] / result["attempted_moves"],
+        "invalid_proposal_rate": float(trace["move_accepted"].isna().mean()),
+        "late_improvement": float(result["best_cost"]) < early_best - 1e-12,
+        "last_improvement_move": last_improvement,
+        "last_improvement_fraction": last_improvement / result["attempted_moves"],
         "trace_fingerprint": result["trace_fingerprint"],
         "runtime_seconds": result["runtime_seconds"],
         "wall_seconds_with_evaluation": time.perf_counter() - started,
         "simulator_calls": result["simulator_calls"],
+        "git_commit": manifest["git_commit"],
+        "calibration_identity": expected_identity,
+        "latency": float(raw["latency"]),
+        "energy": float(raw["energy"]),
+        "area": float(raw["area"]),
+        "dollar": float(raw["dollar"]),
+        "embCarbon": float(raw["embCarbon"]),
+        "opeCarbon": float(raw["opeCarbon"]),
         "search_space_sha256": manifest["search_space_sha256"],
         "calibration_sha256": manifest["calibrations"][str(workload_id)]["sha256"],
         "workload_config_sha256": manifest["workload_config_sha256"][str(workload_id)],
+        "search_trace_sha256": sha256(root / "search_trace.csv"),
+        "architecture_trace_sha256": sha256(root / "architecture_trace.csv"),
+        "best_architecture_sha256": sha256(root / "best_architecture.json"),
+        "initial_architecture_sha256": sha256(root / "initial_architecture.json"),
     }
     atomic_write(result_path, row)
 
@@ -345,25 +419,49 @@ def launch_worker(output: Path, workload_id: int, run: int, initial_seed: int, s
     return subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 
 
+def run_lock_available(root: Path) -> bool:
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "run.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return True
+
+
 def controller(args) -> None:
     output = args.output_root
     manifest = load_json(output / "manifest.json")
     if tuple(manifest["workloads"]) != tuple(args.workloads) or manifest["runs_per_workload"] != args.runs:
         raise RuntimeError("resume arguments do not match the campaign manifest")
     tasks = task_list(args.workloads, args.runs)
-    pending = [task for task in tasks if not result_is_valid(run_dir(output, *task) / "result.json", manifest)]
+    pending = [
+        task for task in tasks
+        if not result_is_valid(run_dir(output, *task) / "result.json", manifest)
+    ]
     if args.stop_after is not None:
         pending = pending[:args.stop_after]
     limited = args.stop_after is not None
     running = {}
     attempts = {}
     lock = (output / "campaign.lock").open("w")
+    acquired = False
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquired = True
         atomic_write(output / "state.json", {"state": "RUNNING", "pending": len(pending), "updated_at": time.time()})
         while pending or running:
             while pending and len(running) < args.max_workers:
                 workload_id, run = pending.pop(0)
+                if not run_lock_available(run_dir(output, workload_id, run)):
+                    pending.append((workload_id, run))
+                    if all(
+                        not run_lock_available(run_dir(output, *task))
+                        for task in pending
+                    ):
+                        break
+                    continue
                 process = launch_worker(
                     output,
                     workload_id,
@@ -389,7 +487,10 @@ def controller(args) -> None:
                 "pending": len(pending),
                 "running": len(running),
                 "completed": sum(
-                    result_is_valid(run_dir(output, *task) / "result.json", manifest) for task in tasks
+                    result_is_valid(
+                        run_dir(output, *task) / "result.json", manifest,
+                        deep=False, verify_artifacts=False,
+                    ) for task in tasks
                 ),
                 "updated_at": time.time(),
             })
@@ -397,8 +498,17 @@ def controller(args) -> None:
                 time.sleep(args.poll_seconds)
         state = "PARTIAL" if limited else "COMPLETE"
         atomic_write(output / "state.json", {"state": state, "updated_at": time.time()})
+    except Exception as error:
+        atomic_write(output / "state.json", {
+            "state": "OPERATIONAL_ERROR",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "updated_at": time.time(),
+        })
+        raise
     finally:
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        if acquired:
+            fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
     report(args)
 
@@ -407,7 +517,13 @@ def status(args) -> None:
     output = args.output_root
     manifest = load_json(output / "manifest.json")
     tasks = task_list(manifest["workloads"], manifest["runs_per_workload"])
-    completed = [task for task in tasks if result_is_valid(run_dir(output, *task) / "result.json", manifest)]
+    completed = [
+        task for task in tasks
+        if result_is_valid(
+            run_dir(output, *task) / "result.json", manifest,
+            deep=False, verify_artifacts=False,
+        )
+    ]
     print(json.dumps({
         "state": load_json(output / "state.json").get("state", "UNKNOWN"),
         "completed": len(completed),
@@ -438,7 +554,10 @@ def report(args) -> None:
     rows = [
         load_json(run_dir(output, *task) / "result.json")
         for task in task_list(manifest["workloads"], manifest["runs_per_workload"])
-        if result_is_valid(run_dir(output, *task) / "result.json", manifest)
+        if result_is_valid(
+            run_dir(output, *task) / "result.json", manifest,
+            deep=False, verify_artifacts=False,
+        )
     ]
     if not rows:
         return
@@ -449,27 +568,52 @@ def report(args) -> None:
         .size().reset_index(name="runs")
     )
     fingerprints.to_csv(output / "fingerprint_summary.csv", index=False)
-    summary = runs.groupby("workload_id").agg(
-        runs=("run", "count"), best_observed=("verified_best_cost", "min"),
-        median_cost=("verified_best_cost", "median"), worst_cost=("verified_best_cost", "max"),
-        median_acceptance_rate=("acceptance_rate", "median"),
-        median_runtime_seconds=("wall_seconds_with_evaluation", "median"),
-        total_runtime_seconds=("wall_seconds_with_evaluation", "sum"),
-        unique_canonical_fingerprints=("canonical_best_fingerprint", "nunique"),
-    ).reset_index()
+    summary_rows = []
+    for workload_id, group in runs.groupby("workload_id", sort=True):
+        best = float(group["verified_best_cost"].min())
+        gaps = (group["verified_best_cost"] - best) / max(abs(best), 1e-12)
+        summary_rows.append({
+            "workload_id": workload_id,
+            "runs": len(group),
+            "best_observed": best,
+            "median_cost": float(group["verified_best_cost"].median()),
+            "worst_cost": float(group["verified_best_cost"].max()),
+            "within_1_percent": float(gaps.le(0.01).mean()),
+            "within_5_percent": float(gaps.le(0.05).mean()),
+            "within_10_percent": float(gaps.le(0.10).mean()),
+            "late_improvement_rate": float(group["late_improvement"].mean()),
+            "median_invalid_proposal_rate": float(group["invalid_proposal_rate"].median()),
+            "median_acceptance_rate": float(group["acceptance_rate"].median()),
+            "median_runtime_seconds": float(group["wall_seconds_with_evaluation"].median()),
+            "total_runtime_seconds": float(group["wall_seconds_with_evaluation"].sum()),
+            "unique_canonical_fingerprints": int(group["canonical_best_fingerprint"].nunique()),
+            "median_latency": float(group["latency"].median()),
+            "median_energy": float(group["energy"].median()),
+            "median_area": float(group["area"].median()),
+            "median_dollar": float(group["dollar"].median()),
+            "median_embCarbon": float(group["embCarbon"].median()),
+            "median_opeCarbon": float(group["opeCarbon"].median()),
+        })
+    summary = pd.DataFrame(summary_rows)
     summary.to_csv(output / "workload_summary.csv", index=False)
     lines = [
         "# Fixed-SA Baseline Campaign", "",
+        f"- Git commit: `{manifest['git_commit']}`",
         f"- Schedule: `{SCHEDULE_NAME}` ({manifest['planned_moves']} moves per run)",
         f"- Policy: `{manifest['intermediate_policy']}`; profile: `t1`",
+        f"- Calibration model: `{manifest['calibration_model_version']}`; simulation model: `{manifest['simulation_model_version']}`",
+        f"- Seed panel: initial `{manifest['seed_panel']['initial_seed_base']}`, search `{manifest['seed_panel']['search_seed_base']}`",
         f"- Valid runs: `{len(runs)}` / `{len(task_list(manifest['workloads'], manifest['runs_per_workload']))}`",
-        "", "| Workload | Runs | Best | Median | Worst | Unique canonical architectures |",
-        "|---:|---:|---:|---:|---:|---:|",
+        "- Raw metric medians are recorded in `workload_summary.csv`; fingerprints and full run diagnostics are recorded in `runs.csv` and `fingerprint_summary.csv`.",
+        "", "| Workload | Runs | Best | Median | Worst | Within 1% | Within 5% | Within 10% | Late improvement | Unique canonical architectures |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary.itertuples(index=False):
         lines.append(
             f"| {row.workload_id} | {row.runs} | {row.best_observed:.12g} | "
             f"{row.median_cost:.12g} | {row.worst_cost:.12g} | "
+            f"{row.within_1_percent:.1%} | {row.within_5_percent:.1%} | "
+            f"{row.within_10_percent:.1%} | {row.late_improvement_rate:.1%} | "
             f"{row.unique_canonical_fingerprints} |"
         )
     (output / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
