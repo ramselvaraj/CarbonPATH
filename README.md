@@ -114,9 +114,25 @@ make calibration WORKLOAD=5
 ```
 Calibration files include a model/search-space/workload identity. CarbonPATH automatically regenerates legacy or stale workload calibrations instead of normalizing new results with incompatible statistics.
 
-### Simulation cache 
+### Simulation cache
 CarbonPATH computes cycle-accurate latency for the AI workloads it runs, which can be time-intensive. To address this, we implemented a lookup table–based simulation cache that dynamically stores key parameters such as systolic array size, workload shape, memory bandwidth, SRAM size, data flow, and the computed cycle count.
 During the simulated annealing algorithm, the simulator is invoked only if a cache miss occurs (i.e., a configuration has not been encountered before). This approach significantly speeds up the computation. Additionally, the simulation cache is configured to automatically update on a miss, enabling faster execution for subsequent runs. Cache rows carry a simulation-model version; legacy rows remain readable but are not reused by the current model.
+
+### Fixed baseline campaign
+
+The reproducible fixed-schedule baseline campaign for workloads 7, 9, and 10 is managed by `script/run_baseline_campaign.py`. Workload 10 is a sequential projection-plus-head workload with shapes `[128, 256, 512]` and `[128, 512, 16]`.
+
+Prepare and run the ten-run-per-workload campaign with:
+
+```bash
+python -m script.run_baseline_campaign prepare \
+  --output-root reports/fixed_sa_baseline_w7_w9_w10_v1
+python -m script.run_baseline_campaign start \
+  --output-root reports/fixed_sa_baseline_w7_w9_w10_v1 \
+  --max-workers 4
+```
+
+The campaign freezes its search-space, calibration, model-version, schedule, and seed identities in `manifest.json`. Each run uses a private cache and writes independently verifiable search and evaluation artifacts. Interrupted campaigns can be continued with `resume`; use `status`, `validate`, and `report` to inspect or regenerate outputs.
 
 
 ## Running Carbon-PATH

@@ -74,6 +74,19 @@ class WorkloadSequenceTests(unittest.TestCase):
                 self.assertEqual(len(WORKLOAD_CONFIGS[workload_id]), 3)
         self.assertEqual(WORKLOAD_CONFIGS[7]["name"], "two_gemm_demo")
         self.assertEqual(len(WORKLOAD_CONFIGS[7]["gemms"]), 2)
+        self.assertEqual(WORKLOAD_CONFIGS[10]["name"], "projection_head_demo")
+        self.assertEqual(len(WORKLOAD_CONFIGS[10]["gemms"]), 2)
+
+    def test_workload_10_is_a_projection_head_sequence(self):
+        workload = parse_workload_entry(10, WORKLOAD_CONFIGS[10])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "projection", "shape": (128, 256, 512)},
+                {"name": "head", "shape": (128, 512, 16)},
+            ],
+        )
 
     def test_chained_gemms_require_compatible_output_and_input_shapes(self):
         workload = parse_workload_entry(
