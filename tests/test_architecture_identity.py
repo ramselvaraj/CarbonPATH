@@ -30,6 +30,13 @@ class ArchitectureIdentityTests(unittest.TestCase):
             architecture_fingerprint(first), architecture_fingerprint(second)
         )
 
+    def test_canonical_fingerprint_accepts_scalar_interconnect_marker(self):
+        architecture = {
+            "Chiplet_1": {"area": 1},
+            "pkg": {"inter_pkg_conn": "2d_na", "mem_pkg_conn": {}},
+        }
+        self.assertIsInstance(canonical_architecture_fingerprint(architecture), str)
+
     def test_fingerprint_changes_with_architecture(self):
         first = {"Chiplet_1": {"sys_array_size": "64x64"}}
         second = {"Chiplet_1": {"sys_array_size": "128x128"}}

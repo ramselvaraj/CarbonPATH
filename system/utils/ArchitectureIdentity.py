@@ -44,14 +44,17 @@ def canonicalize_chiplet_labels(architecture):
 
     package = result.get("pkg", {})
     connections = package.get("inter_pkg_conn", [])
+    connection_dicts = [
+        connection for connection in connections if isinstance(connection, dict)
+    ] if isinstance(connections, list) else []
     outgoing = {
         connection.get("from"): connection.get("to")
-        for connection in connections
+        for connection in connection_dicts
         if connection.get("to") != "na"
     }
     incoming = {
         connection.get("to")
-        for connection in connections
+        for connection in connection_dicts
         if connection.get("to") != "na"
     }
     starts = [chiplet for chiplet in chiplets if chiplet not in incoming]
@@ -73,13 +76,17 @@ def canonicalize_chiplet_labels(architecture):
 
     package = deepcopy(result.get("pkg", {}))
     package["inter_pkg_conn"] = [
-        {
-            **connection,
-            "from": labels.get(connection.get("from"), connection.get("from")),
-            "to": labels.get(connection.get("to"), connection.get("to")),
-        }
+        (
+            {
+                **connection,
+                "from": labels.get(connection.get("from"), connection.get("from")),
+                "to": labels.get(connection.get("to"), connection.get("to")),
+            }
+            if isinstance(connection, dict)
+            else connection
+        )
         for connection in package.get("inter_pkg_conn", [])
-    ]
+    ] if isinstance(package.get("inter_pkg_conn", []), list) else package.get("inter_pkg_conn")
     memory = package.get("mem_pkg_conn", {})
     package["mem_pkg_conn"] = {
         (labels.get(key, key)): value for key, value in memory.items()

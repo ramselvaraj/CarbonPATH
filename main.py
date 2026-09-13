@@ -37,6 +37,7 @@ from system.utils.IntermediateMemoryPolicy import (
     build_boundary_mapping,
     plan_boundary,
 )
+from system.utils.ArchitectureIdentity import architecture_fingerprint
 from config import print_info, fast_test, latency_en, sram_selection_mode
 
 
@@ -836,6 +837,9 @@ def sim_annealing(
     input_file_path="cfg/parameters/input.json",
     calibration_file_path=None,
     initial_architecture=None,
+    temperature_controller=None,
+    level_callback=None,
+    max_total_moves=None,
 ):
     if initial_temp <= 0:
         raise ValueError("initial_temp must be positive")
@@ -845,6 +849,10 @@ def sim_annealing(
         raise ValueError("max_move_per_temp_step must be positive")
     if not 0 < cooling_rate < 1:
         raise ValueError("cooling_rate must be between 0 and 1")
+    if temperature_controller is not None and (
+        max_total_moves is None or max_total_moves <= 0
+    ):
+        raise ValueError("adaptive annealing requires a positive move budget")
     if random_seed is not None:
         random.seed(random_seed)
     
@@ -939,8 +947,18 @@ def sim_annealing(
     SA_run_loop = 0
     all_rows_data = []
     
-    while (temperature > freezing_temp):
-        for iterations in range(max_move_per_temp_step): 
+    while (
+        SA_run_loop < max_total_moves
+        if temperature_controller is not None
+        else temperature > freezing_temp
+    ):
+        level_rows = []
+        remaining_moves = (
+            max_total_moves - SA_run_loop
+            if temperature_controller is not None
+            else max_move_per_temp_step
+        )
+        for iterations in range(min(max_move_per_temp_step, remaining_moves)):
             print(f" -------------------------------------- ") #if print_info else None
             print(f"\n[DBG] Current temp is ***** {temperature} ****** and move iteration is ***** {iterations} ******") #if print_info else None
 
@@ -1019,15 +1037,24 @@ def sim_annealing(
                 'new_cost': None,
                 'cost_diff': None,
                 'move_accepted': None,
-                'move_type': None
+                'move_type': None,
+                'proposal_valid': False,
+                'proposal_changed': False,
+                'current_cost_before': current_cost,
+                'current_cost_after': current_cost,
+                'best_cost_before': best_cost,
+                'best_cost_after': best_cost
                 }
                 log_entry.update({k: None for k in norm_cost_dict}) #Assign all values to be None from norm_cost_dict
                 log_entry.update({k: None for k in raw_cost_dict}) #Assign all values to be None from raw_cost_dict
                 SA_log_data.append(log_entry)
+                level_rows.append(log_entry)
                 continue
             else:
             
                 print("\n[INFO] --- Calculating new cost ---") if print_info else None
+                best_cost_before = best_cost
+                current_cost_before = current_cost
                 new_cost_val, norm_cost_dict, raw_cost_dict = calculate_cost(
                                                     profile_name=cost_profile,
                                                     cost_avgerage=cost_avg,
@@ -1040,6 +1067,10 @@ def sim_annealing(
             
                 #Calcualte the cost delta
                 cost_diff = new_cost_val - current_cost
+                proposal_changed = (
+                    architecture_fingerprint(new_architecture)
+                    != architecture_fingerprint(cur_architecture)
+                )
             
                 #Move accepet check 
                 move_accepted, move_type = accept_move_func(cost_diff=cost_diff, temp=temperature)
@@ -1080,14 +1111,37 @@ def sim_annealing(
                     'new_cost': new_cost_val,
                     'cost_diff': cost_diff,
                     'move_accepted': move_accepted,
-                    'move_type': move_type
+                    'move_type': move_type,
+                    'proposal_valid': True,
+                    'proposal_changed': proposal_changed,
+                    'current_cost_before': current_cost_before,
+                    'current_cost_after': current_cost,
+                    'best_cost_before': best_cost_before,
+                    'best_cost_after': best_cost,
+                    'candidate_fingerprint': architecture_fingerprint(new_architecture)
                 }
                 log_entry.update(norm_cost_dict)
                 log_entry.update(raw_cost_dict)
                 SA_log_data.append(log_entry)
+                level_rows.append(log_entry)
 
-        #Cool down temperature 
-        temperature *= cooling_rate
+        if temperature_controller is not None:
+            temperature = temperature_controller.next_temperature(
+                level_index=len(temperature_controller.history),
+                temperature=temperature,
+                rows=tuple(level_rows),
+                attempted_moves=SA_run_loop,
+                current_cost=current_cost,
+                best_cost_before=level_rows[0]["best_cost_before"],
+                best_cost_after=best_cost,
+            )
+            if not math.isfinite(temperature) or temperature <= 0:
+                raise ValueError("adaptive controller returned invalid temperature")
+            if level_callback is not None:
+                level_callback(temperature_controller.history[-1], tuple(level_rows))
+        else:
+            # Cool down temperature.
+            temperature *= cooling_rate
         
         result_df = pd.DataFrame(SA_log_data)
    

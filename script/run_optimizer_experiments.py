@@ -124,6 +124,9 @@ def run_search(
     base_cache,
     annealing=None,
     intermediate_policy="cold_dram",
+    temperature_controller=None,
+    level_callback=None,
+    max_total_moves=None,
 ):
     annealing = annealing or CURRENT_ANNEALING
     run_dir = Path(output_dir) / label
@@ -150,6 +153,9 @@ def run_search(
                         input_file_path=str(search_space),
                         calibration_file_path=str(calibration_path),
                         initial_architecture=initial_architecture,
+                        temperature_controller=temperature_controller,
+                        level_callback=level_callback,
+                        max_total_moves=max_total_moves,
                         **annealing,
                     )
                 )
@@ -158,6 +164,10 @@ def run_search(
 
     trace.to_csv(run_dir / "search_trace.csv", index=False)
     architecture_trace.to_csv(run_dir / "architecture_trace.csv", index=False)
+    if temperature_controller is not None:
+        pd.DataFrame(
+            [decision.as_dict() for decision in temperature_controller.history]
+        ).to_csv(run_dir / "temperature_trace.csv", index=False)
     write_json(run_dir / "best_architecture.json", best_architecture)
     simulator_calls = log_path.read_text(encoding="utf-8").count(
         "[INFO] Running simulator"
