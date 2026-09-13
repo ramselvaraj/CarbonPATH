@@ -331,6 +331,7 @@ def _run_worker(args: argparse.Namespace) -> None:
     result["verified_metrics"] = {key: float(raw_metrics[key]) for key in ("latency", "energy", "area", "dollar")}
     run_dir.mkdir(parents=True, exist_ok=True)
     trace.to_csv(run_dir / "search_trace.csv", index=False)
+    result["trace_fingerprint"] = trace_fingerprint(pd.read_csv(run_dir / "search_trace.csv"))
     write_json(run_dir / "best_architecture.json", best_architecture)
     with (run_dir / "temperature_trace.csv").open("w", newline="", encoding="utf-8") as stream:
         rows = [decision.as_dict() for decision in controller.history]
