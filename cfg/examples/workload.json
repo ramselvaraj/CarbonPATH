@@ -52,5 +52,18 @@
                 "shape": [128, 512, 16]
             }
         ]
+    },
+    "11": {
+        "name": "ffn_up_down_512",
+        "gemms": [
+            {
+                "name": "expand",
+                "shape": [512, 768, 3072]
+            },
+            {
+                "name": "contract",
+                "shape": [512, 3072, 768]
+            }
+        ]
     }
 }

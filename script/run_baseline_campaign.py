@@ -346,6 +346,34 @@ def _worker(args) -> None:
     )
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError("independent best-architecture evaluation disagrees with search")
+    for boundary_index, (producer, _consumer) in enumerate(
+        zip(workload["gemms"], workload["gemms"][1:]), start=1
+    ):
+        intermediate_bytes = producer["shape"][0] * producer["shape"][2]
+        prefix = f"boundary_{boundary_index}_"
+        required = {
+            name: raw.get(prefix + name)
+            for name in (
+                "intermediate_bytes",
+                "retained_bytes",
+                "forwarded_bytes",
+                "dram_spilled_bytes",
+                "dram_traffic_bytes",
+            )
+        }
+        if any(value is None for value in required.values()):
+            raise RuntimeError(f"boundary {boundary_index} metrics are incomplete")
+        if required["intermediate_bytes"] != intermediate_bytes:
+            raise RuntimeError(f"boundary {boundary_index} intermediate size is invalid")
+        if (
+            required["retained_bytes"]
+            + required["forwarded_bytes"]
+            + required["dram_spilled_bytes"]
+            != intermediate_bytes
+        ):
+            raise RuntimeError(f"boundary {boundary_index} byte accounting is invalid")
+        if required["dram_traffic_bytes"] != 2 * required["dram_spilled_bytes"]:
+            raise RuntimeError(f"boundary {boundary_index} DRAM accounting is invalid")
     trace = result["trace"]
     persisted_trace = pd.read_csv(root / "search_trace.csv")
     cutoff = max(1, math.ceil(len(trace) * 0.8))
@@ -393,6 +421,15 @@ def _worker(args) -> None:
         "best_architecture_sha256": sha256(root / "best_architecture.json"),
         "initial_architecture_sha256": sha256(root / "initial_architecture.json"),
     }
+    row.update(
+        {
+            key: value
+            for key, value in raw.items()
+            if key.startswith("gemm_")
+            or key.startswith("boundary_")
+            or key == "intermediate_policy_requested"
+        }
+    )
     atomic_write(result_path, row)
 
 

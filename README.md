@@ -122,6 +122,26 @@ During the simulated annealing algorithm, the simulator is invoked only if a cac
 
 The reproducible fixed-schedule baseline campaign for workloads 7, 9, and 10 is managed by `script/run_baseline_campaign.py`. Workload 10 is a sequential projection-plus-head workload with shapes `[128, 256, 512]` and `[128, 512, 16]`.
 
+Workload 11 is a chained FFN surrogate using dimensions from workload 1: `[512, 768, 3072] -> [512, 3072, 768]`. It represents expansion and contraction only; activations, normalization, bias, and residual behavior are not modeled. Its intermediate is `1,572,864` int8 bytes and its total MAC count is `2,415,919,104`.
+
+The paired workload-1/workload-11 pilot keeps the full search space, `t1`, `direct_forward`, and the fixed SA schedule unchanged while using 200 calibration samples:
+
+```bash
+python -m script.run_baseline_campaign prepare \
+  --output-root reports/fixed_sa_pilot_w1_w11_v1 \
+  --workloads 1 11 \
+  --runs 3 \
+  --calibration-samples 200
+
+python -m script.run_baseline_campaign start \
+  --output-root reports/fixed_sa_pilot_w1_w11_v1 \
+  --workloads 1 11 \
+  --runs 3 \
+  --max-workers 6
+```
+
+Validate and inspect the pilot before launching a full 10-run-per-workload campaign. Run artifacts include per-GEMM and intermediate-boundary metrics for this comparison.
+
 Prepare and run the ten-run-per-workload campaign with:
 
 ```bash

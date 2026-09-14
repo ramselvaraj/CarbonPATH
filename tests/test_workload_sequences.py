@@ -76,6 +76,24 @@ class WorkloadSequenceTests(unittest.TestCase):
         self.assertEqual(len(WORKLOAD_CONFIGS[7]["gemms"]), 2)
         self.assertEqual(WORKLOAD_CONFIGS[10]["name"], "projection_head_demo")
         self.assertEqual(len(WORKLOAD_CONFIGS[10]["gemms"]), 2)
+        self.assertEqual(WORKLOAD_CONFIGS[11]["name"], "ffn_up_down_512")
+        self.assertEqual(len(WORKLOAD_CONFIGS[11]["gemms"]), 2)
+
+    def test_workload_11_is_a_dimension_compatible_ffn_chain(self):
+        workload = parse_workload_entry(11, WORKLOAD_CONFIGS[11])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "expand", "shape": (512, 768, 3072)},
+                {"name": "contract", "shape": (512, 3072, 768)},
+            ],
+        )
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            2_415_919_104,
+        )
+        self.assertEqual(512 * 3072, 1_572_864)
 
     def test_workload_10_is_a_projection_head_sequence(self):
         workload = parse_workload_entry(10, WORKLOAD_CONFIGS[10])
