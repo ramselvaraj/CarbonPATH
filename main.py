@@ -38,6 +38,8 @@ from system.utils.IntermediateMemoryPolicy import (
     plan_boundary,
 )
 from system.utils.ArchitectureIdentity import architecture_fingerprint
+from system.utils.NonGemmEstimator import NonGemmEstimator
+from system.utils.TransferEstimator import ResolvedRoute
 from config import print_info, fast_test, latency_en, sram_selection_mode
 
 
@@ -221,6 +223,141 @@ def simulate_latency_energy(
     energy_pj = sum(metric["dram_interconnect_energy_pj"] for metric in gemm_metrics)
     sram_energy_pj = sum(metric["sram_energy_pj"] for metric in gemm_metrics)
     return latency_ns, energy_pj, sram_energy_pj, gemm_metrics, boundary_plans
+
+
+def _resolve_transfer_route(system, source_id, destination_id, transfer_model):
+    path, reciprocal, energy = system.get_shortest_path(source_id, destination_id)
+    return ResolvedRoute(
+        source_chiplet_id=source_id,
+        destination_chiplet_id=destination_id,
+        path=tuple(path) if path else None,
+        path_bandwidth_reciprocal_ns_per_byte=reciprocal,
+        path_energy_pj_per_bit=energy,
+        setup_latency_ns=transfer_model.get("setup_latency_ns", 0.0),
+        hop_latency_ns=transfer_model.get("hop_latency_ns", 0.0),
+    )
+
+
+def simulate_operation_sequence(
+    cache: SimulationCache,
+    arch_dict: dict,
+    workload,
+    intermediate_policy="direct_forward",
+    transfer_model=None,
+):
+    """Evaluate a normalized parser workload mixing GEMM and non-GEMM ops.
+
+    V0 supports a single sequential chain placed on exactly one systolic-array
+    chiplet and one FPGA chiplet. GEMMs use the existing SCALE-Sim path and
+    ReLU operations use the FPGA estimator. Transfer accounting has exactly one
+    owner: the stage that moves a tensor between GEMM and FPGA.
+    """
+    if intermediate_policy not in INTERMEDIATE_POLICIES:
+        raise ValueError(f"Unknown intermediate-memory policy: {intermediate_policy}")
+    transfer_model = transfer_model or {}
+    operations = workload.operations
+    estimator = NonGemmEstimator()
+
+    operation_metrics = []
+    system = None
+    sa_id = None
+    fpga_id = None
+
+    for index, operation in enumerate(operations):
+        previous_type = operations[index - 1].operation_type if index > 0 else None
+        next_type = (
+            operations[index + 1].operation_type
+            if index + 1 < len(operations)
+            else None
+        )
+
+        if operation.operation_type == "gemm":
+            scheduler, system = prepare_single_gemm(
+                cache, arch_dict, operation.gemm_shape
+            )
+            sa_cores = sorted(system.core_dict.values(), key=lambda core: core.id)
+            if len(sa_cores) != 1:
+                raise ValueError(
+                    "V0 parser workloads require exactly one systolic-array chiplet"
+                )
+            if len(system.fpga_chiplet_dict) != 1:
+                raise ValueError(
+                    "V0 parser workloads require exactly one FPGA chiplet"
+                )
+            sa_id = sa_cores[0].id
+            fpga_id = sorted(system.fpga_chiplet_dict)[0]
+
+            result = simulate_single_gemm(
+                cache,
+                arch_dict,
+                operation.gemm_shape,
+                prepared=(scheduler, system),
+                activation_from_dram=(previous_type != "relu"),
+                output_to_dram=(next_type != "relu"),
+            )
+            operation_metrics.append(
+                {
+                    "operation_id": operation.operation_id,
+                    "operation_type": "gemm",
+                    "name": operation.operation_id,
+                    "shape": operation.gemm_shape,
+                    "input_tensor_id": operation.input_tensor_id,
+                    "output_tensor_id": operation.output_tensor_id,
+                    "latency_ns": result["latency_ns"],
+                    "communication_energy_pj": result["dram_interconnect_energy_pj"],
+                    "sram_energy_pj": result["sram_energy_pj"],
+                    "compute_energy_pj": None,
+                    "tile_mappings": collect_tile_mappings(scheduler),
+                }
+            )
+            continue
+
+        if operation.operation_type == "relu":
+            if system is None or sa_id is None or fpga_id is None:
+                raise ValueError(
+                    "V0 parser workloads must begin with a GEMM before a ReLU"
+                )
+            fpga = system.fpga_chiplet_dict[fpga_id]
+            input_route = _resolve_transfer_route(
+                system, sa_id, fpga_id, transfer_model
+            )
+            output_route = _resolve_transfer_route(
+                system, fpga_id, sa_id, transfer_model
+            )
+            stage = estimator.estimate_stage(
+                operation, fpga, input_route, output_route
+            )
+            operation_metrics.append(
+                {
+                    "operation_id": operation.operation_id,
+                    "operation_type": "relu",
+                    "name": operation.operation_id,
+                    "shape": None,
+                    "input_tensor_id": operation.input_tensor_id,
+                    "output_tensor_id": operation.output_tensor_id,
+                    "element_count": operation.element_count,
+                    "latency_ns": stage.total_latency_ns,
+                    "communication_energy_pj": stage.transfer_energy_pj,
+                    "sram_energy_pj": 0.0,
+                    "compute_energy_pj": stage.compute_energy_pj,
+                    "input_transfer": stage.input_transfer,
+                    "output_transfer": stage.output_transfer,
+                    "compute": stage.compute,
+                    "tile_mappings": [],
+                }
+            )
+            continue
+
+        raise ValueError(
+            f"Unsupported operation type: {operation.operation_type}"
+        )
+
+    latency_ns = sum(metric["latency_ns"] for metric in operation_metrics)
+    communication_energy_pj = sum(
+        metric["communication_energy_pj"] for metric in operation_metrics
+    )
+    sram_energy_pj = sum(metric["sram_energy_pj"] for metric in operation_metrics)
+    return latency_ns, communication_energy_pj, sram_energy_pj, operation_metrics
 
 
 def add_per_gemm_metrics(output, gemm_metrics, power):

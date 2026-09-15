@@ -4,6 +4,7 @@ Global routing, interconnect info recorded here.
 '''
 
 from system.utils.SystolicArray import SystolicArray
+from system.utils.FpgaChiplet import FpgaChiplet
 from chiplet.n_utils import d2d_bw_calc, calculate_memory_bandwidth, get_sram_area_energy
 from config import print_info
 
@@ -29,9 +30,16 @@ DRAM_pj_per_bit = energy_pj_data.get("DRAM_pj_per_bit", {})
 
 class ChipletSystem:
 
+    @staticmethod
+    def _is_fpga_chiplet(chiplet: dict) -> bool:
+        return str(chiplet.get("chiplet_type", "systolic_array")).lower() == "fpga"
+
     def _core_setup(self, chiplet_dict: dict, dram_bw_list: list) -> dict[int: SystolicArray]:
         core_dict = dict()
-        for key in chiplet_dict.keys():
+        ordered_keys = sorted(
+            chiplet_dict.keys(), key=lambda key: int(key.split("_")[1])
+        )
+        for bandwidth_index, key in enumerate(ordered_keys):
             chiplet = chiplet_dict[key]
             tech_node = int(chiplet["tech_node"])
             size = int(chiplet["sys_array_size"].split("x")[0])
@@ -41,7 +49,7 @@ class ChipletSystem:
             power = float(chiplet["power"])
             area = float(chiplet["area"]) - float(sram_area)
             frequency = self.BASE_FREQUENCY * freq_scaling_factors[tech_node]
-            bandwidth = int (dram_bw_list[id] * 10**9 / self.BASE_FREQUENCY) #bytes per cycle calibrated to base frequency
+            bandwidth = int (dram_bw_list[bandwidth_index] * 10**9 / self.BASE_FREQUENCY) #bytes per cycle calibrated to base frequency
             core = SystolicArray(size, size, buf, 
                                  id, power = power, area = area, 
                                  bandwidth=bandwidth,
@@ -51,6 +59,13 @@ class ChipletSystem:
             core_dict[id] = core
 
         return core_dict
+
+    def _fpga_setup(self, chiplet_dict: dict) -> dict:
+        fpga_dict = dict()
+        for key in chiplet_dict.keys():
+            chiplet = FpgaChiplet.from_dict(key, chiplet_dict[key])
+            fpga_dict[chiplet.id] = chiplet
+        return fpga_dict
     
 
     def _interconnect_setup(self, pkg:dict):
@@ -85,7 +100,7 @@ class ChipletSystem:
             src_id = int(src.split('_')[1]) - 1
             location = conn["loc"]
             if location != "2.5d_chiplet": # set the location only if this core is not 2.5D chiplet
-                self.core_dict[src_id].location = location.split("_")[1]
+                self.endpoint_dict[src_id].location = location.split("_")[1]
             if dst == "na":
                 continue
             dst_id = int(dst.split('_')[1]) - 1
@@ -100,11 +115,11 @@ class ChipletSystem:
                 protocol = protocol_3d
                 is_3d_connection = True
             links.add(tuple(sorted((src_id, dst_id))))
-            src_area = self.core_dict[src_id].area
-            dst_area = self.core_dict[dst_id].area
+            src_area = self.endpoint_dict[src_id].area
+            dst_area = self.endpoint_dict[dst_id].area
 
-            src_core_bw = d2d_bw_calc(pkg=d2d_connect_type, protocol=protocol, area=src_area, is_3d=is_3d_connection, node=self.core_dict[src_id].node)
-            dst_core_bw = d2d_bw_calc(d2d_connect_type, protocol, dst_area, is_3d_connection, node=self.core_dict[dst_id].node)
+            src_core_bw = d2d_bw_calc(pkg=d2d_connect_type, protocol=protocol, area=src_area, is_3d=is_3d_connection, node=self.endpoint_dict[src_id].node)
+            dst_core_bw = d2d_bw_calc(d2d_connect_type, protocol, dst_area, is_3d_connection, node=self.endpoint_dict[dst_id].node)
 
             bw = min(src_core_bw, dst_core_bw) * 10**9 / BASE_FREQUENCY
             print(f"[DEBUG COST - LATENCY - D2D 2] BW is {bw} will be min (src, dst) min{src_core_bw} , {dst_core_bw} = {bw} \n") if print_info else None
@@ -135,9 +150,17 @@ class ChipletSystem:
         pkg = solution["pkg"]
         self.dram_type = pkg["mem_pkg_conn"]["mem_type"]
         dram_bw_list = calculate_memory_bandwidth(arch_dict)
-        chiplet = {k:v for k, v in solution.items() if k != "pkg" and k != 'WL_mapping'}
+        chiplet = {k:v for k, v in solution.items() if k.startswith("Chiplet_")}
+        sa_chiplet = {
+            k: v for k, v in chiplet.items() if not self._is_fpga_chiplet(v)
+        }
+        fpga_chiplet = {
+            k: v for k, v in chiplet.items() if self._is_fpga_chiplet(v)
+        }
         self.BASE_FREQUENCY = BASE_FREQUENCY
-        self.core_dict = self._core_setup(chiplet, dram_bw_list=dram_bw_list)
+        self.core_dict = self._core_setup(sa_chiplet, dram_bw_list=dram_bw_list)
+        self.fpga_chiplet_dict = self._fpga_setup(fpga_chiplet)
+        self.endpoint_dict = {**self.core_dict, **self.fpga_chiplet_dict}
 
         self.interconnect_dict, self.interconnect_type, self.links = self._interconnect_setup(pkg)
 
@@ -150,6 +173,14 @@ class ChipletSystem:
         
         for core in self.core_dict.values():
             print(f"core[{core.id}]: {core.frequency}, {core.dram_bandwidth}") if print_info else None
+
+    @property
+    def systolic_arrays(self):
+        return list(self.core_dict.values())
+
+    @property
+    def fpga_chiplets(self):
+        return list(self.fpga_chiplet_dict.values())
 
         
     def get_shortest_path(self, src_id: int, dst_id: int) -> tuple[list[int], float, float]:

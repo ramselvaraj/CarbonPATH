@@ -13,13 +13,19 @@ from main import (
     calibration_identity,
     get_calib_cost_avg,
     simulate_latency_energy,
+    simulate_operation_sequence,
     validate_calibration,
+)
+from system.utils.AtlasWorkload import (
+    ATLAS_WORKLOAD_FORMAT,
+    AtlasWorkload,
+    parse_atlas_workload_entry,
 )
 from system.utils.IntermediateMemoryPolicy import INTERMEDIATE_POLICIES
 from system.utils.NetworkWorkload import (
     LinearNetwork,
     canonical_fingerprint,
-    load_network,
+    parse_network_entry,
 )
 from system.utils.SimulationCache import SimulationCache
 
@@ -45,6 +51,165 @@ def _load_json(path):
         return json.load(file)
 
 
+def load_workload(path):
+    """Load either a legacy linear network or a normalized parser workload."""
+    entry = _load_json(path)
+    if isinstance(entry, dict) and entry.get("format") == ATLAS_WORKLOAD_FORMAT:
+        return parse_atlas_workload_entry(entry)
+    return parse_network_entry(entry)
+
+
+ATLAS_LAYER_COLUMNS = [
+    "layer_index",
+    "layer_name",
+    "operation_type",
+    "input_tensor_id",
+    "output_tensor_id",
+    "M",
+    "K",
+    "N",
+    "element_count",
+    "parallel_lanes",
+    "compute_cycles",
+    "compute_latency_ns",
+    "latency_ns",
+    "input_transfer_bytes",
+    "input_transfer_latency_ns",
+    "input_transfer_energy_pj",
+    "output_transfer_bytes",
+    "output_transfer_latency_ns",
+    "output_transfer_energy_pj",
+    "communication_energy_pj",
+    "sram_energy_pj",
+    "compute_energy_pj",
+    "relu_compute_energy_pj",
+    "resource_feasible",
+    "total_energy_pj",
+]
+
+
+def _atlas_operation_row(index, metric, power):
+    operation_type = metric["operation_type"]
+    compute_energy = power * metric["latency_ns"] * 1000
+    row = {
+        "layer_index": index,
+        "layer_name": metric["operation_id"],
+        "operation_type": operation_type,
+        "input_tensor_id": metric.get("input_tensor_id"),
+        "output_tensor_id": metric.get("output_tensor_id"),
+        "M": None,
+        "K": None,
+        "N": None,
+        "element_count": None,
+        "parallel_lanes": None,
+        "compute_cycles": None,
+        "compute_latency_ns": None,
+        "latency_ns": metric["latency_ns"],
+        "input_transfer_bytes": None,
+        "input_transfer_latency_ns": None,
+        "input_transfer_energy_pj": None,
+        "output_transfer_bytes": None,
+        "output_transfer_latency_ns": None,
+        "output_transfer_energy_pj": None,
+        "communication_energy_pj": metric["communication_energy_pj"],
+        "sram_energy_pj": metric["sram_energy_pj"],
+        "compute_energy_pj": compute_energy,
+        "relu_compute_energy_pj": metric.get("compute_energy_pj"),
+        "resource_feasible": None,
+        "total_energy_pj": (
+            metric["communication_energy_pj"] + metric["sram_energy_pj"] + compute_energy
+        ),
+    }
+    if operation_type == "gemm" and metric.get("shape") is not None:
+        row["M"], row["K"], row["N"] = metric["shape"]
+    if operation_type == "relu":
+        compute = metric["compute"]
+        input_transfer = metric["input_transfer"]
+        output_transfer = metric["output_transfer"]
+        row["element_count"] = metric["element_count"]
+        row["parallel_lanes"] = compute.parallel_lanes
+        row["compute_cycles"] = compute.compute_cycles
+        row["compute_latency_ns"] = compute.compute_latency_ns
+        row["input_transfer_bytes"] = input_transfer.byte_count
+        row["input_transfer_latency_ns"] = input_transfer.latency_ns
+        row["input_transfer_energy_pj"] = input_transfer.energy_pj
+        row["output_transfer_bytes"] = output_transfer.byte_count
+        row["output_transfer_latency_ns"] = output_transfer.latency_ns
+        row["output_transfer_energy_pj"] = output_transfer.energy_pj
+        row["resource_feasible"] = compute.feasible
+    return row
+
+
+def evaluate_atlas_network(network, architecture, cache, intermediate_policy=None):
+    policy = intermediate_policy or network.intermediate_policy
+    power, area, dollar_cost = calculate_system_metrics(architecture)
+
+    latency, communication, sram, operation_metrics = simulate_operation_sequence(
+        cache,
+        architecture,
+        network,
+        intermediate_policy=policy,
+        transfer_model=architecture.get("transfer_model", {}),
+    )
+    compute_energy = power * latency * 1000
+    total_energy = communication + sram + compute_energy
+
+    layer_rows = [
+        _atlas_operation_row(index, metric, power)
+        for index, metric in enumerate(operation_metrics, start=1)
+    ]
+
+    mapping_rows = []
+    for index, metric in enumerate(operation_metrics, start=1):
+        for tile_index, tile in enumerate(metric.get("tile_mappings", []), start=1):
+            mapping_rows.append(
+                {
+                    "layer_index": index,
+                    "layer_name": metric["operation_id"],
+                    "tile_index": tile_index,
+                    **tile,
+                }
+            )
+
+    gemm_count = sum(
+        1 for metric in operation_metrics if metric["operation_type"] == "gemm"
+    )
+    relu_count = sum(
+        1 for metric in operation_metrics if metric["operation_type"] == "relu"
+    )
+
+    summary = {
+        "network": network.name,
+        "network_fingerprint": network.fingerprint(),
+        "dtype": network.dtype,
+        "layer_count": len(operation_metrics),
+        "operation_count": len(operation_metrics),
+        "gemm_count": gemm_count,
+        "relu_count": relu_count,
+        "requested_policy": policy,
+        "latency_ns": latency,
+        "communication_energy_pj": communication,
+        "sram_energy_pj": sram,
+        "compute_energy_pj": compute_energy,
+        "total_energy_pj": total_energy,
+        "system_power_w": power,
+        "system_area_mm2": area,
+        "system_cost_usd": dollar_cost,
+        "calibrated": False,
+        "cost_profile": None,
+        "objective": None,
+        "normalized_metrics": None,
+        "embodied_carbon_kg": None,
+        "operational_carbon_kg": None,
+    }
+    return NetworkEvaluation(
+        summary=summary,
+        layers=pd.DataFrame(layer_rows, columns=ATLAS_LAYER_COLUMNS),
+        boundaries=pd.DataFrame(),
+        mapping=pd.DataFrame(mapping_rows),
+    )
+
+
 def evaluate_network(
     network: LinearNetwork,
     architecture,
@@ -53,6 +218,11 @@ def evaluate_network(
     cost_profile="t1",
     calibration=None,
 ):
+    if isinstance(network, AtlasWorkload):
+        return evaluate_atlas_network(
+            network, architecture, cache, intermediate_policy
+        )
+
     policy = intermediate_policy or network.intermediate_policy
 
     power, area, dollar_cost = calculate_system_metrics(architecture)
@@ -279,6 +449,21 @@ def _make_cache(path, simulator_dir):
     return SimulationCache(path, simulator_dir=simulator_dir)
 
 
+def _print_atlas_workload(network):
+    rows = []
+    for index, operation in enumerate(network.operations, start=1):
+        rows.append(
+            {
+                "index": index,
+                "operation": operation.operation_id,
+                "type": operation.operation_type,
+                "input": operation.input_tensor_id,
+                "output": operation.output_tensor_id,
+            }
+        )
+    print(pd.DataFrame(rows).to_string(index=False))
+
+
 def _print_compiled_network(network):
     rows = []
     for index, layer in enumerate(network.layers, start=1):
@@ -434,14 +619,31 @@ def main():
     calibrate_parser.add_argument("--run-name", default="network_calibration")
 
     args = parser.parse_args()
-    network = load_network(args.network)
+    network = load_workload(args.network)
     if args.command == "validate":
-        print(
-            f"Network '{network.name}' is valid: {len(network.layers)} linear layer(s), "
-            f"dtype={network.dtype}, policy={network.intermediate_policy}"
-        )
-        _print_compiled_network(network)
+        if isinstance(network, AtlasWorkload):
+            print(
+                f"Workload '{network.name}' is valid: "
+                f"{len(network.operations)} operation(s), dtype={network.dtype}"
+            )
+            _print_atlas_workload(network)
+        else:
+            print(
+                f"Network '{network.name}' is valid: {len(network.layers)} linear layer(s), "
+                f"dtype={network.dtype}, policy={network.intermediate_policy}"
+            )
+            _print_compiled_network(network)
         return
+
+    if isinstance(network, AtlasWorkload) and args.command == "calibrate":
+        raise ValueError(
+            "Calibration is not supported for parser workloads in V0"
+        )
+
+    if isinstance(network, AtlasWorkload) and args.command == "compare-memory":
+        raise ValueError(
+            "Memory-policy comparison is not supported for parser workloads in V0"
+        )
 
     if args.command == "calibrate":
         if args.samples <= 0:

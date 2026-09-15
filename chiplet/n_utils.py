@@ -1382,8 +1382,13 @@ def calculate_memory_bandwidth(solution_data, return_unified_bw=True):
     # 5. Calculate Bandwidth for each chiplet individually
     chiplet_bandwidth_dict = {}
     for chip_id, channels in chiplet_channels.items():
+        chiplet_config = solution_data.get(chip_id, {})
+        # FPGA chiplets are non-GEMM endpoints and have no systolic-array
+        # memory-bandwidth entry; they are excluded from the SA bandwidth list.
+        if str(chiplet_config.get('chiplet_type', 'systolic_array')).lower() == 'fpga':
+            continue
         # Get the systolic array size for this specific chiplet
-        sys_array_size = solution_data.get(chip_id, {}).get('sys_array_size')
+        sys_array_size = chiplet_config.get('sys_array_size')
         if not sys_array_size:
             print(f"[ERROR] Could not find sys_array_size for {chip_id}.")
             chiplet_bandwidth_dict[chip_id] = 0

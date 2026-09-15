@@ -299,6 +299,43 @@ contains one row per linear layer, `boundaries.csv` contains intermediate-memory
 placement and transfer decisions, and `mapping.csv` records every scheduled
 tile's logical layer and physical core assignment.
 
+### 4a. Parser Workloads and FPGA ReLU (V0)
+
+Alongside the legacy linear-network schema, the front end accepts normalized
+parser workloads (`"format": "atlas-normalized-v0"`) produced by an external
+ATLAS parser. `system/utils/AtlasWorkload.py` validates a single sequential
+chain of `gemm` and `relu` operations with explicit tensor IDs and `int8`
+tensors. `network.load_workload` dispatches to this parser or the legacy one
+based on the envelope `format`.
+
+Mixed operation sequences are evaluated by `main.simulate_operation_sequence`,
+which requires exactly one systolic-array chiplet and one FPGA chiplet. GEMMs
+use the existing SCALE-Sim schedulers and cache; ReLU uses an analytical FPGA
+estimator. `ChipletSystem` builds a `FpgaChiplet` endpoint for any chiplet
+declared with `"chiplet_type": "fpga"` and routes SA-to-FPGA and FPGA-to-SA
+transfers through the same weighted interconnect graph used for SA-to-SA
+transfers.
+
+The FPGA estimator family lives in `system/utils/NonGemmEstimator.py`:
+
+- `ReluComputeEstimator` derives `parallel_lanes` from the FPGA's CLB/BRAM/DSP
+  counts and the declared per-lane ReLU implementation profile, then computes
+  `ceil(elements / lanes)` cycles and the compute latency. It never invents a
+  lane count and returns an infeasible result when resources yield zero lanes.
+- `ReluStageComposer` composes the serialized input transfer, compute, and
+  output transfer.
+- `NonGemmEstimator` is the facade and operation dispatcher.
+
+`system/utils/TransferEstimator.py` is operation-agnostic: it receives an
+already-resolved route and a tensor payload and returns byte count, latency, and
+energy. It does not resolve routes or inspect topology.
+
+For `GEMM -> ReLU -> GEMM`, the producing GEMM runs with
+`output_to_dram = False` and the consuming GEMM runs with
+`activation_from_dram = False`; the ReLU stage owns both transfer legs. This
+gives every physical tensor movement exactly one accounting owner. Full details
+and the parser contract are in `docs/atlas_fpga_relu_v0.md`.
+
 ### 5. GEMM Sequence and Scheduling
 
 `simulate_latency_energy()` loops through the normalized sequence in order. For
@@ -540,8 +577,16 @@ Technology-scaling tables:
 - `system/utils/SystolicArray.py`: per-core dimensions, capacity, frequency,
   bandwidth, workload list, cycle counts, and energy scales.
 - `system/utils/ChipletSystem.py`: converts architecture dictionaries into
-  cores and a weighted interconnect graph, finds routes, and adjusts 3D memory
-  paths.
+  systolic-array cores and FPGA endpoints plus a weighted interconnect graph,
+  finds routes across all endpoints, and adjusts 3D memory paths.
+- `system/utils/AtlasWorkload.py`: normalized parser-workload front end for
+  sequential `gemm`/`relu` chains.
+- `system/utils/FpgaChiplet.py`: FPGA endpoint with resources and a per-lane
+  ReLU implementation profile.
+- `system/utils/TransferEstimator.py`: resolved-route transfer latency and
+  energy for an `int8` tensor payload.
+- `system/utils/NonGemmEstimator.py`: ReLU compute estimator, serialized stage
+  composer, and non-GEMM operation dispatcher.
 - `system/utils/Scheduler.py`: GEMM partitioning, core assignment, optional tile
   merging, DRAM/interconnect/reduction timing, and energy aggregation.
 - `system/utils/SimulationCache.py`: indexed CSV lookup, SCALE-Sim miss
@@ -553,6 +598,10 @@ Technology-scaling tables:
 
 - `cfg/examples/workload.json`: six legacy GEMM shapes, one chained two-GEMM
   example, and one four-identical-GEMM scaling example.
+- `cfg/examples/atlas_gemm_relu_gemm.json`: normalized parser workload with a
+  `GEMM -> ReLU -> GEMM` chain.
+- `cfg/examples/sa_fpga_architecture.json`: fixed one-SA plus one-FPGA
+  architecture with a 2.5D link and a configured ReLU implementation profile.
 - `cfg/parameters/`: design-space and physical-model inputs described under
   Model Parameters.
 - `cfg/calibration/calibration_1.json` through `calibration_6.json`: checked-in

@@ -1,0 +1,66 @@
+{
+    "Chiplet_1": {
+        "tech_node": "7",
+        "sys_array_size": "64x64",
+        "sram_buf": 256,
+        "area": 1.0,
+        "power": 1.11875
+    },
+    "Chiplet_2": {
+        "chiplet_type": "fpga",
+        "tech_node": "7",
+        "area": 10.0,
+        "power": 2.0,
+        "frequency_hz": 300000000,
+        "clbs": 10000,
+        "brams": 200,
+        "dsps": 500,
+        "relu_implementation": {
+            "clbs_per_lane": 5,
+            "brams_per_lane": 0,
+            "dsps_per_lane": 0,
+            "max_parallel_lanes": 64,
+            "energy_per_element_pj": null
+        }
+    },
+    "pkg": {
+        "HI_pkg_type": "2.5d",
+        "inter_pkg_conn": [
+            {
+                "from": "Chiplet_1",
+                "to": "Chiplet_2",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            },
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_1",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet"
+            }
+        ],
+        "protocol_3d": "na",
+        "protocol_2.5d": "ucie_std",
+        "mem_pkg_conn": {
+            "mem_type": "hbm2",
+            "Chiplet_1": 4,
+            "Chiplet_2": 0
+        }
+    },
+    "WL_mapping": {
+        "mapping": {
+            "chiplet_data_sharing_enabled": 0,
+            "if_splitting_k": 0,
+            "dataflow": [
+                "ws"
+            ],
+            "assign_workload_in_ascending_order": 0,
+            "static_tiling": 0,
+            "merge_tiles": 0
+        }
+    },
+    "transfer_model": {
+        "setup_latency_ns": 5.0,
+        "hop_latency_ns": 1.0
+    }
+}

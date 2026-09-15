@@ -1,0 +1,41 @@
+{
+    "format": "atlas-normalized-v0",
+    "name": "gemm_relu_gemm",
+    "operations": [
+        {
+            "operation_id": "gemm_1",
+            "operation_type": "gemm",
+            "input_tensor_id": "input",
+            "weight_tensor_id": "gemm_1:weights",
+            "output_tensor_id": "gemm_1:output",
+            "input_shape": [8, 64],
+            "weight_shape": [64, 64],
+            "output_shape": [8, 64],
+            "m": 8,
+            "k": 64,
+            "n": 64
+        },
+        {
+            "operation_id": "relu_1",
+            "operation_type": "relu",
+            "input_tensor_id": "gemm_1:output",
+            "output_tensor_id": "relu_1:output",
+            "input_shape": [8, 64],
+            "output_shape": [8, 64],
+            "element_count": 512
+        },
+        {
+            "operation_id": "gemm_2",
+            "operation_type": "gemm",
+            "input_tensor_id": "relu_1:output",
+            "weight_tensor_id": "gemm_2:weights",
+            "output_tensor_id": "gemm_2:output",
+            "input_shape": [8, 64],
+            "weight_shape": [64, 64],
+            "output_shape": [8, 64],
+            "m": 8,
+            "k": 64,
+            "n": 64
+        }
+    ]
+}
