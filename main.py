@@ -1,4 +1,5 @@
 from ast import arg
+from dataclasses import dataclass
 import hashlib
 import json 
 import os
@@ -38,8 +39,17 @@ from system.utils.IntermediateMemoryPolicy import (
     plan_boundary,
 )
 from system.utils.ArchitectureIdentity import architecture_fingerprint
-from system.utils.NonGemmEstimator import NonGemmEstimator
-from system.utils.TransferEstimator import ResolvedRoute
+from system.utils.EvaluationProfile import load_evaluation_profile
+from system.utils.NonGemmEstimator import FpgaReluEvaluator
+from system.utils.OperationEvaluator import (
+    EvaluationContext,
+    EvaluatorRegistry,
+    OperationEstimate,
+    OperationEvaluator,
+)
+from system.utils.OperationPlacement import FixedSingleSaSingleFpgaPlacement
+from system.utils.TensorMovement import TensorMovementService, TensorResidency
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from config import print_info, fast_test, latency_en, sram_selection_mode
 
 
@@ -229,43 +239,127 @@ def simulate_latency_energy(
     return latency_ns, energy_pj, sram_energy_pj, gemm_metrics, boundary_plans
 
 
-def _resolve_transfer_route(system, source_id, destination_id, transfer_model):
-    path, reciprocal, energy = system.get_shortest_path(source_id, destination_id)
-    return ResolvedRoute(
-        source_chiplet_id=source_id,
-        destination_chiplet_id=destination_id,
-        path=tuple(path) if path else None,
-        path_bandwidth_reciprocal_ns_per_byte=reciprocal,
-        path_energy_pj_per_bit=energy,
-        setup_latency_ns=transfer_model.get("setup_latency_ns", 0.0),
-        hop_latency_ns=transfer_model.get("hop_latency_ns", 0.0),
-    )
+class LegacyScaleSimGemmEvaluator(OperationEvaluator):
+    """Operation evaluator wrapping the existing SCALE-Sim GEMM path.
+
+    Dynamic energy is the GEMM's DRAM/interconnect plus SRAM energy. Compute
+    latency is the full GEMM latency. The executor adds baseline architecture
+    power over the elapsed latency and any tensor movement energy.
+    """
+
+    evaluator_id = "legacy_scale_sim_gemm_v1"
+
+    def evaluate(self, operation, placement, context) -> OperationEstimate:
+        if operation.operation_type != "gemm":
+            raise UnsupportedEvaluation(
+                f"LegacyScaleSimGemmEvaluator cannot evaluate "
+                f"'{operation.operation_type}'"
+            )
+        result = simulate_single_gemm(
+            context.cache,
+            context.architecture,
+            operation.gemm_shape,
+            activation_from_dram=context.activation_from_dram,
+            output_to_dram=context.output_to_dram,
+        )
+        dynamic_energy_pj = (
+            result["dram_interconnect_energy_pj"] + result["sram_energy_pj"]
+        )
+        return OperationEstimate(
+            operation_id=operation.operation_id,
+            evaluator_id=self.evaluator_id,
+            compute_latency_ns=result["latency_ns"],
+            dynamic_energy_pj=dynamic_energy_pj,
+        )
 
 
-def simulate_operation_sequence(
+def build_default_evaluator_registry():
+    registry = EvaluatorRegistry()
+    registry.register(LegacyScaleSimGemmEvaluator())
+    registry.register(FpgaReluEvaluator())
+    return registry
+
+
+@dataclass(frozen=True)
+class AtlasOperationResult:
+    index: int
+    operation_id: str
+    operation_type: str
+    endpoint_id: int
+    endpoint_kind: str
+    evaluator_id: str
+    m: object
+    k: object
+    n: object
+    element_count: int
+    compute_latency_ns: float
+    compute_energy_pj: float
+    movement: object
+
+
+@dataclass(frozen=True)
+class AtlasEvaluation:
+    graph: object
+    profile: object
+    results: tuple
+    system: object
+
+    @property
+    def latency_ns(self):
+        total = 0.0
+        for result in self.results:
+            total += result.compute_latency_ns
+            if result.movement is not None:
+                total += result.movement.latency_ns
+        return total
+
+    @property
+    def compute_energy_pj(self):
+        return sum(result.compute_energy_pj for result in self.results)
+
+    @property
+    def movement_energy_pj(self):
+        return sum(
+            result.movement.energy_pj
+            for result in self.results
+            if result.movement is not None
+        )
+
+    def total_energy_pj(self, system_power_w):
+        return (
+            system_power_w * self.latency_ns * 1000
+            + self.compute_energy_pj
+            + self.movement_energy_pj
+        )
+
+
+def evaluate_atlas_graph(
     cache: SimulationCache,
     arch_dict: dict,
-    workload,
-    intermediate_policy="direct_forward",
+    graph,
+    profile=None,
     transfer_model=None,
 ):
-    """Evaluate a normalized parser workload mixing GEMM and non-GEMM ops.
+    """Evaluate a direct ATLAS graph on a chiplet architecture.
 
-    V0 supports a single sequential chain placed on exactly one systolic-array
-    chiplet and one FPGA chiplet. GEMMs use the existing SCALE-Sim path and
-    ReLU operations use the FPGA estimator. Transfer accounting has exactly one
-    owner: the stage that moves a tensor between GEMM and FPGA.
+    The executor owns operation order, operation placement, tensor residency,
+    tensor movement, and aggregation. Evaluators own only compute latency and
+    dynamic energy, chosen by the evaluation profile per operation type.
     """
-    if intermediate_policy not in INTERMEDIATE_POLICIES:
-        raise ValueError(f"Unknown intermediate-memory policy: {intermediate_policy}")
-    transfer_model = transfer_model or {}
-    operations = workload.operations
-    estimator = NonGemmEstimator()
+    profile = profile or load_evaluation_profile()
+    transfer_model = (
+        transfer_model
+        if transfer_model is not None
+        else arch_dict.get("transfer_model", {})
+    )
+    system = ChipletSystem(arch_dict=arch_dict, BASE_FREQUENCY=FREQUENCY)
+    placement_policy = FixedSingleSaSingleFpgaPlacement(system)
+    movement_service = TensorMovementService()
+    registry = build_default_evaluator_registry()
 
-    operation_metrics = []
-    system = None
-    sa_id = None
-    fpga_id = None
+    operations = graph.operations
+    results = []
+    residency = None
 
     for index, operation in enumerate(operations):
         previous_type = operations[index - 1].operation_type if index > 0 else None
@@ -274,94 +368,60 @@ def simulate_operation_sequence(
             if index + 1 < len(operations)
             else None
         )
+        placement = placement_policy.endpoint_for(operation.operation_type)
 
-        if operation.operation_type == "gemm":
-            scheduler, system = prepare_single_gemm(
-                cache, arch_dict, operation.gemm_shape
+        movement = None
+        if residency is not None:
+            movement = movement_service.move(
+                tensor_id=operation.input_tensor_id,
+                element_count=residency.element_count,
+                source_endpoint=residency.endpoint_id,
+                destination_endpoint=placement.endpoint_id,
+                system=system,
+                transfer_model=transfer_model,
             )
-            sa_cores = sorted(system.core_dict.values(), key=lambda core: core.id)
-            if len(sa_cores) != 1:
-                raise ValueError(
-                    "V0 parser workloads require exactly one systolic-array chiplet"
-                )
-            if len(system.fpga_chiplet_dict) != 1:
-                raise ValueError(
-                    "V0 parser workloads require exactly one FPGA chiplet"
-                )
-            sa_id = sa_cores[0].id
-            fpga_id = sorted(system.fpga_chiplet_dict)[0]
 
-            result = simulate_single_gemm(
-                cache,
-                arch_dict,
-                operation.gemm_shape,
-                prepared=(scheduler, system),
-                activation_from_dram=(previous_type != "relu"),
-                output_to_dram=(next_type != "relu"),
-            )
-            operation_metrics.append(
-                {
-                    "operation_id": operation.operation_id,
-                    "operation_type": "gemm",
-                    "name": operation.operation_id,
-                    "shape": operation.gemm_shape,
-                    "input_tensor_id": operation.input_tensor_id,
-                    "output_tensor_id": operation.output_tensor_id,
-                    "latency_ns": result["latency_ns"],
-                    "communication_energy_pj": result["dram_interconnect_energy_pj"],
-                    "sram_energy_pj": result["sram_energy_pj"],
-                    "compute_energy_pj": None,
-                    "tile_mappings": collect_tile_mappings(scheduler),
-                }
-            )
-            continue
+        evaluator = registry.get(profile.evaluator_id_for(operation.operation_type))
+        context = EvaluationContext(
+            cache=cache,
+            architecture=arch_dict,
+            system=system,
+            activation_from_dram=(previous_type != "relu"),
+            output_to_dram=(next_type != "relu"),
+        )
+        estimate = evaluator.evaluate(operation, placement, context)
 
-        if operation.operation_type == "relu":
-            if system is None or sa_id is None or fpga_id is None:
-                raise ValueError(
-                    "V0 parser workloads must begin with a GEMM before a ReLU"
-                )
-            fpga = system.fpga_chiplet_dict[fpga_id]
-            input_route = _resolve_transfer_route(
-                system, sa_id, fpga_id, transfer_model
+        shape = operation.gemm_shape if operation.operation_type == "gemm" else None
+        results.append(
+            AtlasOperationResult(
+                index=index + 1,
+                operation_id=operation.operation_id,
+                operation_type=operation.operation_type,
+                endpoint_id=placement.endpoint_id,
+                endpoint_kind=placement.endpoint_kind,
+                evaluator_id=estimate.evaluator_id,
+                m=shape[0] if shape else None,
+                k=shape[1] if shape else None,
+                n=shape[2] if shape else None,
+                element_count=operation.element_count,
+                compute_latency_ns=estimate.compute_latency_ns,
+                compute_energy_pj=estimate.dynamic_energy_pj,
+                movement=movement,
             )
-            output_route = _resolve_transfer_route(
-                system, fpga_id, sa_id, transfer_model
-            )
-            stage = estimator.estimate_stage(
-                operation, fpga, input_route, output_route
-            )
-            operation_metrics.append(
-                {
-                    "operation_id": operation.operation_id,
-                    "operation_type": "relu",
-                    "name": operation.operation_id,
-                    "shape": None,
-                    "input_tensor_id": operation.input_tensor_id,
-                    "output_tensor_id": operation.output_tensor_id,
-                    "element_count": operation.element_count,
-                    "latency_ns": stage.total_latency_ns,
-                    "communication_energy_pj": stage.transfer_energy_pj,
-                    "sram_energy_pj": 0.0,
-                    "compute_energy_pj": stage.compute_energy_pj,
-                    "input_transfer": stage.input_transfer,
-                    "output_transfer": stage.output_transfer,
-                    "compute": stage.compute,
-                    "tile_mappings": [],
-                }
-            )
-            continue
-
-        raise ValueError(
-            f"Unsupported operation type: {operation.operation_type}"
+        )
+        residency = TensorResidency(
+            tensor_id=operation.output_tensor_id,
+            endpoint_id=placement.endpoint_id,
+            endpoint_kind=placement.endpoint_kind,
+            element_count=operation.element_count,
         )
 
-    latency_ns = sum(metric["latency_ns"] for metric in operation_metrics)
-    communication_energy_pj = sum(
-        metric["communication_energy_pj"] for metric in operation_metrics
+    return AtlasEvaluation(
+        graph=graph,
+        profile=profile,
+        results=tuple(results),
+        system=system,
     )
-    sram_energy_pj = sum(metric["sram_energy_pj"] for metric in operation_metrics)
-    return latency_ns, communication_energy_pj, sram_energy_pj, operation_metrics
 
 
 def add_per_gemm_metrics(output, gemm_metrics, power):

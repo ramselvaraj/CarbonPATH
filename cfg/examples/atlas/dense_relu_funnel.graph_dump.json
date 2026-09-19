@@ -1,0 +1,494 @@
+[
+  {
+    "index": 1,
+    "name": "input_layer",
+    "class": "Input",
+    "inputs": [
+      {
+        "name": "input",
+        "shape": null,
+        "precision": "?"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        128
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "input_layer",
+      "class_name": "InputLayer",
+      "module": "keras.src.layers.core.input_layer",
+      "input_keras_tensor_names": [],
+      "input_shape": [
+        128,
+        128
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor"
+      ],
+      "inputs": [],
+      "index": 1,
+      "trace": false,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "reuse_factor": 1,
+      "target_cycles": null
+    }
+  },
+  {
+    "index": 13,
+    "name": "gemm_expand",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "input_layer",
+        "shape": [
+          128,
+          128
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<13,6,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight13",
+        "shape": [
+          1024,
+          128
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "14294"
+      },
+      {
+        "name": "bias13",
+        "shape": [
+          1024
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "1024"
+      }
+    ],
+    "attrs": {
+      "n_in": 128,
+      "n_out": 1024,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        128,
+        1024
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 13,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config13 : nnet::gemm_config {\n    static const unsigned n_in = 128;\n    static const unsigned n_out = 1024;\n    static const unsigned n_patches = 128;\n    static const unsigned gemm_m = 128;\n    static const unsigned gemm_k = 128;\n    static const unsigned gemm_n = 1024;\n    static const unsigned gemm_ip_id = 13;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 131072;\n    typedef gemm_expand_weight_t weight_t;\n    typedef gemm_expand_bias_t bias_t;\n    typedef gemm_expand_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight13_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight13_gemm_cols; }\n    static bias_t* gemm_bias() { return bias13; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<input_layer_t, layer13_t, config13>(input_layer, layer13_out);"
+    }
+  },
+  {
+    "index": 4,
+    "name": "expand_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "expand",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<13,6,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "expand_relu",
+      "class_name": "Activation",
+      "module": "keras.src.layers.activations.activation",
+      "input_keras_tensor_names": [
+        "keras_tensor_1"
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor_2"
+      ],
+      "activation": "relu",
+      "n_in": 131072,
+      "inputs": [
+        "expand"
+      ],
+      "index": 4,
+      "trace": false,
+      "reuse_factor": 1,
+      "table_size": 262144,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "target_cycles": null,
+      "config_cpp": "struct relu_config4 : nnet::activ_config {\n    static const unsigned n_in = 131072;\n    static const unsigned table_size = 262144;\n    static const unsigned io_type = nnet::io_stream;\n    static const unsigned reuse_factor = 1;\n    typedef expand_relu_table_t table_t;\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_activation.h",
+        "nnet_utils/nnet_activation_stream.h"
+      ],
+      "function_cpp": "nnet::relu<layer13_t, expand_relu_t, relu_config4>(layer13_out, layer4_out);"
+    }
+  },
+  {
+    "index": 14,
+    "name": "gemm_contract1",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "expand_relu",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight14",
+        "shape": [
+          512,
+          1024
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "65294"
+      },
+      {
+        "name": "bias14",
+        "shape": [
+          512
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "512"
+      }
+    ],
+    "attrs": {
+      "n_in": 1024,
+      "n_out": 512,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        128,
+        512
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 14,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config14 : nnet::gemm_config {\n    static const unsigned n_in = 1024;\n    static const unsigned n_out = 512;\n    static const unsigned n_patches = 128;\n    static const unsigned gemm_m = 128;\n    static const unsigned gemm_k = 1024;\n    static const unsigned gemm_n = 512;\n    static const unsigned gemm_ip_id = 14;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 524288;\n    typedef gemm_contract1_weight_t weight_t;\n    typedef gemm_contract1_bias_t bias_t;\n    typedef gemm_contract1_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight14_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight14_gemm_cols; }\n    static bias_t* gemm_bias() { return bias14; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<expand_relu_t, layer14_t, config14>(layer4_out, layer14_out);"
+    }
+  },
+  {
+    "index": 7,
+    "name": "contract1_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "contract1",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "contract1_relu",
+      "class_name": "Activation",
+      "module": "keras.src.layers.activations.activation",
+      "input_keras_tensor_names": [
+        "keras_tensor_3"
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor_4"
+      ],
+      "activation": "relu",
+      "n_in": 65536,
+      "inputs": [
+        "contract1"
+      ],
+      "index": 7,
+      "trace": false,
+      "reuse_factor": 1,
+      "table_size": 2097152,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "target_cycles": null,
+      "config_cpp": "struct relu_config7 : nnet::activ_config {\n    static const unsigned n_in = 65536;\n    static const unsigned table_size = 2097152;\n    static const unsigned io_type = nnet::io_stream;\n    static const unsigned reuse_factor = 1;\n    typedef contract1_relu_table_t table_t;\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_activation.h",
+        "nnet_utils/nnet_activation_stream.h"
+      ],
+      "function_cpp": "nnet::relu<layer14_t, contract1_relu_t, relu_config7>(layer14_out, layer7_out);"
+    }
+  },
+  {
+    "index": 15,
+    "name": "gemm_contract2",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "contract1_relu",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<15,8,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight15",
+        "shape": [
+          256,
+          512
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "11621"
+      },
+      {
+        "name": "bias15",
+        "shape": [
+          256
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "256"
+      }
+    ],
+    "attrs": {
+      "n_in": 512,
+      "n_out": 256,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        128,
+        256
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 15,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config15 : nnet::gemm_config {\n    static const unsigned n_in = 512;\n    static const unsigned n_out = 256;\n    static const unsigned n_patches = 128;\n    static const unsigned gemm_m = 128;\n    static const unsigned gemm_k = 512;\n    static const unsigned gemm_n = 256;\n    static const unsigned gemm_ip_id = 15;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 131072;\n    typedef gemm_contract2_weight_t weight_t;\n    typedef gemm_contract2_bias_t bias_t;\n    typedef gemm_contract2_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight15_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight15_gemm_cols; }\n    static bias_t* gemm_bias() { return bias15; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<contract1_relu_t, layer15_t, config15>(layer7_out, layer15_out);"
+    }
+  },
+  {
+    "index": 10,
+    "name": "contract2_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "contract2",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<15,8,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "contract2_relu",
+      "class_name": "Activation",
+      "module": "keras.src.layers.activations.activation",
+      "input_keras_tensor_names": [
+        "keras_tensor_5"
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor_6"
+      ],
+      "activation": "relu",
+      "n_in": 32768,
+      "inputs": [
+        "contract2"
+      ],
+      "index": 10,
+      "trace": false,
+      "reuse_factor": 1,
+      "table_size": 1048576,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "target_cycles": null,
+      "config_cpp": "struct relu_config10 : nnet::activ_config {\n    static const unsigned n_in = 32768;\n    static const unsigned table_size = 1048576;\n    static const unsigned io_type = nnet::io_stream;\n    static const unsigned reuse_factor = 1;\n    typedef contract2_relu_table_t table_t;\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_activation.h",
+        "nnet_utils/nnet_activation_stream.h"
+      ],
+      "function_cpp": "nnet::relu<layer15_t, contract2_relu_t, relu_config10>(layer15_out, layer10_out);"
+    }
+  },
+  {
+    "index": 16,
+    "name": "gemm_head",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "contract2_relu",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        64
+      ],
+      "precision": "fixed<20,8,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight16",
+        "shape": [
+          64,
+          256
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "933"
+      },
+      {
+        "name": "bias16",
+        "shape": [
+          64
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "64"
+      }
+    ],
+    "attrs": {
+      "n_in": 256,
+      "n_out": 64,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        128,
+        64
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 16,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config16 : nnet::gemm_config {\n    static const unsigned n_in = 256;\n    static const unsigned n_out = 64;\n    static const unsigned n_patches = 128;\n    static const unsigned gemm_m = 128;\n    static const unsigned gemm_k = 256;\n    static const unsigned gemm_n = 64;\n    static const unsigned gemm_ip_id = 16;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 16384;\n    typedef gemm_head_weight_t weight_t;\n    typedef gemm_head_bias_t bias_t;\n    typedef gemm_head_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight16_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight16_gemm_cols; }\n    static bias_t* gemm_bias() { return bias16; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<contract2_relu_t, result_t, config16>(layer10_out, layer16_out);"
+    }
+  }
+]

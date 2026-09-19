@@ -11,15 +11,15 @@ from chiplet.n_utils import calculate_system_metrics
 from main import (
     calculate_cost,
     calibration_identity,
+    evaluate_atlas_graph,
     get_calib_cost_avg,
     simulate_latency_energy,
-    simulate_operation_sequence,
     validate_calibration,
 )
-from system.utils.AtlasWorkload import (
-    ATLAS_WORKLOAD_FORMAT,
-    AtlasWorkload,
-    parse_atlas_workload_entry,
+from system.utils.AtlasGraphAdapter import (
+    AtlasGraph,
+    default_graph_name,
+    parse_atlas_graph,
 )
 from system.utils.IntermediateMemoryPolicy import INTERMEDIATE_POLICIES
 from system.utils.NetworkWorkload import (
@@ -52,10 +52,10 @@ def _load_json(path):
 
 
 def load_workload(path):
-    """Load either a legacy linear network or a normalized parser workload."""
+    """Load either a legacy linear network or a direct ATLAS graph dump."""
     entry = _load_json(path)
-    if isinstance(entry, dict) and entry.get("format") == ATLAS_WORKLOAD_FORMAT:
-        return parse_atlas_workload_entry(entry)
+    if isinstance(entry, list):
+        return parse_atlas_graph(entry, default_graph_name(path))
     return parse_network_entry(entry)
 
 
@@ -63,135 +63,103 @@ ATLAS_LAYER_COLUMNS = [
     "layer_index",
     "layer_name",
     "operation_type",
-    "input_tensor_id",
-    "output_tensor_id",
+    "evaluator_id",
+    "endpoint_id",
+    "endpoint_kind",
     "M",
     "K",
     "N",
     "element_count",
-    "parallel_lanes",
-    "compute_cycles",
     "compute_latency_ns",
+    "movement_latency_ns",
     "latency_ns",
-    "input_transfer_bytes",
-    "input_transfer_latency_ns",
-    "input_transfer_energy_pj",
-    "output_transfer_bytes",
-    "output_transfer_latency_ns",
-    "output_transfer_energy_pj",
-    "communication_energy_pj",
-    "sram_energy_pj",
     "compute_energy_pj",
-    "relu_compute_energy_pj",
-    "resource_feasible",
+    "movement_energy_pj",
+    "movement_method",
+    "movement_source_endpoint",
+    "movement_destination_endpoint",
     "total_energy_pj",
 ]
 
 
-def _atlas_operation_row(index, metric, power):
-    operation_type = metric["operation_type"]
-    compute_energy = power * metric["latency_ns"] * 1000
-    row = {
-        "layer_index": index,
-        "layer_name": metric["operation_id"],
-        "operation_type": operation_type,
-        "input_tensor_id": metric.get("input_tensor_id"),
-        "output_tensor_id": metric.get("output_tensor_id"),
-        "M": None,
-        "K": None,
-        "N": None,
-        "element_count": None,
-        "parallel_lanes": None,
-        "compute_cycles": None,
-        "compute_latency_ns": None,
-        "latency_ns": metric["latency_ns"],
-        "input_transfer_bytes": None,
-        "input_transfer_latency_ns": None,
-        "input_transfer_energy_pj": None,
-        "output_transfer_bytes": None,
-        "output_transfer_latency_ns": None,
-        "output_transfer_energy_pj": None,
-        "communication_energy_pj": metric["communication_energy_pj"],
-        "sram_energy_pj": metric["sram_energy_pj"],
-        "compute_energy_pj": compute_energy,
-        "relu_compute_energy_pj": metric.get("compute_energy_pj"),
-        "resource_feasible": None,
+def _atlas_operation_row(result, power):
+    movement = result.movement
+    movement_latency_ns = movement.latency_ns if movement is not None else 0.0
+    movement_energy_pj = movement.energy_pj if movement is not None else 0.0
+    latency_ns = result.compute_latency_ns + movement_latency_ns
+    return {
+        "layer_index": result.index,
+        "layer_name": result.operation_id,
+        "operation_type": result.operation_type,
+        "evaluator_id": result.evaluator_id,
+        "endpoint_id": result.endpoint_id,
+        "endpoint_kind": result.endpoint_kind,
+        "M": result.m,
+        "K": result.k,
+        "N": result.n,
+        "element_count": result.element_count,
+        "compute_latency_ns": result.compute_latency_ns,
+        "movement_latency_ns": movement_latency_ns,
+        "latency_ns": latency_ns,
+        "compute_energy_pj": result.compute_energy_pj,
+        "movement_energy_pj": movement_energy_pj,
+        "movement_method": movement.method if movement is not None else None,
+        "movement_source_endpoint": (
+            movement.source_endpoint if movement is not None else None
+        ),
+        "movement_destination_endpoint": (
+            movement.destination_endpoint if movement is not None else None
+        ),
         "total_energy_pj": (
-            metric["communication_energy_pj"] + metric["sram_energy_pj"] + compute_energy
+            power * latency_ns * 1000
+            + result.compute_energy_pj
+            + movement_energy_pj
         ),
     }
-    if operation_type == "gemm" and metric.get("shape") is not None:
-        row["M"], row["K"], row["N"] = metric["shape"]
-    if operation_type == "relu":
-        compute = metric["compute"]
-        input_transfer = metric["input_transfer"]
-        output_transfer = metric["output_transfer"]
-        row["element_count"] = metric["element_count"]
-        row["parallel_lanes"] = compute.parallel_lanes
-        row["compute_cycles"] = compute.compute_cycles
-        row["compute_latency_ns"] = compute.compute_latency_ns
-        row["input_transfer_bytes"] = input_transfer.byte_count
-        row["input_transfer_latency_ns"] = input_transfer.latency_ns
-        row["input_transfer_energy_pj"] = input_transfer.energy_pj
-        row["output_transfer_bytes"] = output_transfer.byte_count
-        row["output_transfer_latency_ns"] = output_transfer.latency_ns
-        row["output_transfer_energy_pj"] = output_transfer.energy_pj
-        row["resource_feasible"] = compute.feasible
-    return row
 
 
-def evaluate_atlas_network(network, architecture, cache, intermediate_policy=None):
-    policy = intermediate_policy or network.intermediate_policy
+def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None, profile=None):
     power, area, dollar_cost = calculate_system_metrics(architecture)
-
-    latency, communication, sram, operation_metrics = simulate_operation_sequence(
+    evaluation = evaluate_atlas_graph(
         cache,
         architecture,
-        network,
-        intermediate_policy=policy,
+        graph,
+        profile=profile,
         transfer_model=architecture.get("transfer_model", {}),
     )
-    compute_energy = power * latency * 1000
-    total_energy = communication + sram + compute_energy
+    latency_ns = evaluation.latency_ns
+    baseline_energy_pj = power * latency_ns * 1000
+    compute_energy_pj = evaluation.compute_energy_pj
+    movement_energy_pj = evaluation.movement_energy_pj
+    total_energy_pj = baseline_energy_pj + compute_energy_pj + movement_energy_pj
 
     layer_rows = [
-        _atlas_operation_row(index, metric, power)
-        for index, metric in enumerate(operation_metrics, start=1)
+        _atlas_operation_row(result, power) for result in evaluation.results
     ]
-
-    mapping_rows = []
-    for index, metric in enumerate(operation_metrics, start=1):
-        for tile_index, tile in enumerate(metric.get("tile_mappings", []), start=1):
-            mapping_rows.append(
-                {
-                    "layer_index": index,
-                    "layer_name": metric["operation_id"],
-                    "tile_index": tile_index,
-                    **tile,
-                }
-            )
-
     gemm_count = sum(
-        1 for metric in operation_metrics if metric["operation_type"] == "gemm"
+        1 for result in evaluation.results if result.operation_type == "gemm"
     )
     relu_count = sum(
-        1 for metric in operation_metrics if metric["operation_type"] == "relu"
+        1 for result in evaluation.results if result.operation_type == "relu"
     )
 
     summary = {
-        "network": network.name,
-        "network_fingerprint": network.fingerprint(),
-        "dtype": network.dtype,
-        "layer_count": len(operation_metrics),
-        "operation_count": len(operation_metrics),
+        "network": graph.name,
+        "network_fingerprint": graph.fingerprint(),
+        "dtype": graph.dtype,
+        "evaluation_profile": evaluation.profile.name,
+        "evaluation_profile_version": evaluation.profile.version,
+        "evaluation_profile_fingerprint": evaluation.profile.fingerprint(),
+        "layer_count": len(evaluation.results),
+        "operation_count": len(evaluation.results),
         "gemm_count": gemm_count,
         "relu_count": relu_count,
-        "requested_policy": policy,
-        "latency_ns": latency,
-        "communication_energy_pj": communication,
-        "sram_energy_pj": sram,
-        "compute_energy_pj": compute_energy,
-        "total_energy_pj": total_energy,
+        "movement_policy": evaluation.profile.movement_policy,
+        "latency_ns": latency_ns,
+        "baseline_energy_pj": baseline_energy_pj,
+        "compute_energy_pj": compute_energy_pj,
+        "movement_energy_pj": movement_energy_pj,
+        "total_energy_pj": total_energy_pj,
         "system_power_w": power,
         "system_area_mm2": area,
         "system_cost_usd": dollar_cost,
@@ -206,7 +174,7 @@ def evaluate_atlas_network(network, architecture, cache, intermediate_policy=Non
         summary=summary,
         layers=pd.DataFrame(layer_rows, columns=ATLAS_LAYER_COLUMNS),
         boundaries=pd.DataFrame(),
-        mapping=pd.DataFrame(mapping_rows),
+        mapping=pd.DataFrame(),
     )
 
 
@@ -218,7 +186,7 @@ def evaluate_network(
     cost_profile="t1",
     calibration=None,
 ):
-    if isinstance(network, AtlasWorkload):
+    if isinstance(network, AtlasGraph):
         return evaluate_atlas_network(
             network, architecture, cache, intermediate_policy
         )
@@ -390,7 +358,9 @@ def write_network_evaluation(evaluation, output_dir):
         "## Summary",
         "",
         f"- Layers: {evaluation.summary['layer_count']}",
-        f"- Requested memory policy: `{evaluation.summary['requested_policy']}`",
+        "- Policy: `"
+        f"{evaluation.summary.get('requested_policy') or evaluation.summary.get('movement_policy')}"
+        "`",
         f"- Latency: {evaluation.summary['latency_ns'] / 1e3:.6f} us",
         f"- Total energy: {evaluation.summary['total_energy_pj'] / 1e6:.6f} uJ",
         f"- System power: {evaluation.summary['system_power_w']:.6f} W",
@@ -621,9 +591,9 @@ def main():
     args = parser.parse_args()
     network = load_workload(args.network)
     if args.command == "validate":
-        if isinstance(network, AtlasWorkload):
+        if isinstance(network, AtlasGraph):
             print(
-                f"Workload '{network.name}' is valid: "
+                f"ATLAS graph '{network.name}' is valid: "
                 f"{len(network.operations)} operation(s), dtype={network.dtype}"
             )
             _print_atlas_workload(network)
@@ -635,14 +605,12 @@ def main():
             _print_compiled_network(network)
         return
 
-    if isinstance(network, AtlasWorkload) and args.command == "calibrate":
-        raise ValueError(
-            "Calibration is not supported for parser workloads in V0"
-        )
+    if isinstance(network, AtlasGraph) and args.command == "calibrate":
+        raise ValueError("Calibration is not supported for ATLAS graph evaluation")
 
-    if isinstance(network, AtlasWorkload) and args.command == "compare-memory":
+    if isinstance(network, AtlasGraph) and args.command == "compare-memory":
         raise ValueError(
-            "Memory-policy comparison is not supported for parser workloads in V0"
+            "Memory-policy comparison is not supported for ATLAS graph evaluation"
         )
 
     if args.command == "calibrate":
@@ -681,11 +649,14 @@ def main():
 
     architecture = _load_json(args.architecture)
     search_space = _load_json(args.search_space)
-    calibration_policy = (
-        args.memory_policy or network.intermediate_policy
-        if args.command == "evaluate"
-        else network.intermediate_policy
-    )
+    if isinstance(network, AtlasGraph):
+        calibration_policy = None
+    else:
+        calibration_policy = (
+            args.memory_policy or network.intermediate_policy
+            if args.command == "evaluate"
+            else network.intermediate_policy
+        )
     calibration = (
         _load_network_calibration(
             args.calibration,
@@ -693,7 +664,7 @@ def main():
             search_space,
             calibration_policy,
         )
-        if args.calibration
+        if args.calibration and calibration_policy is not None
         else None
     )
     output_dir = args.output_dir or _default_output_dir(network, args.command)

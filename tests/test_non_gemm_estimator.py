@@ -1,33 +1,27 @@
 import unittest
+from types import SimpleNamespace
 
-from system.utils.AtlasWorkload import parse_atlas_workload_entry
+from system.utils.AtlasGraphAdapter import ReluOperation
 from system.utils.FpgaChiplet import FpgaChiplet, FpgaReluImplementation
 from system.utils.NonGemmEstimator import (
+    FpgaReluEvaluator,
     NonGemmEstimator,
     ReluComputeEstimator,
     ReluStageComposer,
 )
+from system.utils.OperationEvaluator import EvaluationContext
+from system.utils.OperationPlacement import EndpointPlacement
 from system.utils.TransferEstimator import ResolvedRoute
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 def _relu_operation(element_count=512, shape=(8, 64)):
-    return parse_atlas_workload_entry(
-        {
-            "format": "atlas-normalized-v0",
-            "name": "relu_only",
-            "operations": [
-                {
-                    "operation_id": "relu_1",
-                    "operation_type": "relu",
-                    "input_tensor_id": "relu_1:input",
-                    "output_tensor_id": "relu_1:output",
-                    "input_shape": list(shape),
-                    "output_shape": list(shape),
-                    "element_count": element_count,
-                }
-            ],
-        }
-    ).operations[0]
+    return ReluOperation(
+        operation_id="relu_1",
+        input_tensor_id="relu_1:input",
+        output_tensor_id="relu_1:output",
+        element_count=element_count,
+    )
 
 
 def _fpga(
@@ -161,6 +155,42 @@ class ReluStageComposerTests(unittest.TestCase):
         stage = composer.compose(operation, _fpga(), route_in, route_out)
         expected = 512 * 8 * 0.5 + 512 * 8 * 0.25
         self.assertAlmostEqual(stage.transfer_energy_pj, expected)
+
+
+class FpgaReluEvaluatorTests(unittest.TestCase):
+    def _context(self, fpga):
+        return EvaluationContext(
+            cache=None,
+            architecture={},
+            system=SimpleNamespace(fpga_chiplet_dict={1: fpga}),
+        )
+
+    def test_returns_compute_latency_and_dynamic_energy(self):
+        estimate = FpgaReluEvaluator().evaluate(
+            _relu_operation(),
+            EndpointPlacement(1, "fpga"),
+            self._context(_fpga(energy_per_element_pj=0.5)),
+        )
+        self.assertEqual(estimate.operation_id, "relu_1")
+        self.assertEqual(estimate.evaluator_id, "legacy_fpga_relu_v1")
+        self.assertAlmostEqual(estimate.compute_latency_ns, 8 / 300000000 * 1e9)
+        self.assertAlmostEqual(estimate.dynamic_energy_pj, 512 * 0.5)
+
+    def test_missing_endpoint_is_unsupported(self):
+        with self.assertRaises(UnsupportedEvaluation):
+            FpgaReluEvaluator().evaluate(
+                _relu_operation(),
+                EndpointPlacement(7, "fpga"),
+                self._context(_fpga()),
+            )
+
+    def test_infeasible_resources_are_unsupported(self):
+        with self.assertRaises(UnsupportedEvaluation):
+            FpgaReluEvaluator().evaluate(
+                _relu_operation(),
+                EndpointPlacement(1, "fpga"),
+                self._context(_fpga(clbs=4)),
+            )
 
 
 class NonGemmEstimatorFacadeTests(unittest.TestCase):

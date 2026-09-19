@@ -19,11 +19,16 @@ import math
 from dataclasses import dataclass
 
 from system.utils.FpgaChiplet import FpgaChiplet
+from system.utils.OperationEvaluator import (
+    OperationEstimate,
+    OperationEvaluator,
+)
 from system.utils.TransferEstimator import (
     ResolvedRoute,
     TransferEstimator,
     TransferRequest,
 )
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 @dataclass(frozen=True)
@@ -172,6 +177,42 @@ class ReluStageComposer:
             total_latency_ns=total_latency_ns,
             transfer_energy_pj=transfer_energy_pj,
             compute_energy_pj=compute.compute_energy_pj,
+        )
+
+
+class FpgaReluEvaluator(OperationEvaluator):
+    """Operation evaluator for a ReLU placed on an FPGA endpoint.
+
+    Wraps the resource-derived ReLU compute estimator. It returns only compute
+    latency and dynamic energy; tensor movement is owned by the tensor movement
+    service and the executor owns placement and residency.
+    """
+
+    evaluator_id = "legacy_fpga_relu_v1"
+
+    def __init__(self, compute_estimator=None):
+        self.compute_estimator = compute_estimator or ReluComputeEstimator()
+
+    def evaluate(self, operation, placement, context) -> OperationEstimate:
+        if operation.operation_type != "relu":
+            raise UnsupportedEvaluation(
+                f"FpgaReluEvaluator cannot evaluate '{operation.operation_type}'"
+            )
+        fpga = context.system.fpga_chiplet_dict.get(placement.endpoint_id)
+        if fpga is None:
+            raise UnsupportedEvaluation(
+                f"no FPGA endpoint {placement.endpoint_id} for '{operation.operation_id}'"
+            )
+        estimate = self.compute_estimator.estimate(operation, fpga)
+        if not estimate.feasible:
+            raise UnsupportedEvaluation(
+                f"{operation.operation_id}: {estimate.infeasibility_reason}"
+            )
+        return OperationEstimate(
+            operation_id=operation.operation_id,
+            evaluator_id=self.evaluator_id,
+            compute_latency_ns=estimate.compute_latency_ns,
+            dynamic_energy_pj=estimate.compute_energy_pj or 0.0,
         )
 
 

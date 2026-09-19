@@ -299,42 +299,44 @@ contains one row per linear layer, `boundaries.csv` contains intermediate-memory
 placement and transfer decisions, and `mapping.csv` records every scheduled
 tile's logical layer and physical core assignment.
 
-### 4a. Parser Workloads and FPGA ReLU (V0)
+### 4a. Direct ATLAS Graph Evaluation
 
-Alongside the legacy linear-network schema, the front end accepts normalized
-parser workloads (`"format": "atlas-normalized-v0"`) produced by an external
-ATLAS parser. `system/utils/AtlasWorkload.py` validates a single sequential
-chain of `gemm` and `relu` operations with explicit tensor IDs and `int8`
-tensors. `network.load_workload` dispatches to this parser or the legacy one
-based on the envelope `format`.
+Alongside the legacy linear-network schema, the front end accepts the raw ATLAS
+graph dump (ATLAS `--dump-graph` output) directly. `system/utils/AtlasGraphAdapter.py`
+reads the top-level node array and validates one linear chain of constant-weight
+`Gemm` nodes and `relu` `Activation` nodes over `int8` tensors.
+`network.load_workload` dispatches on the top-level JSON type: an array is an
+ATLAS graph, an object is a legacy linear network.
 
-Mixed operation sequences are evaluated by `main.simulate_operation_sequence`,
-which requires exactly one systolic-array chiplet and one FPGA chiplet. GEMMs
-use the existing SCALE-Sim schedulers and cache; ReLU uses an analytical FPGA
-estimator. `ChipletSystem` builds a `FpgaChiplet` endpoint for any chiplet
-declared with `"chiplet_type": "fpga"` and routes SA-to-FPGA and FPGA-to-SA
-transfers through the same weighted interconnect graph used for SA-to-SA
-transfers.
+ATLAS graphs are evaluated by `main.evaluate_atlas_graph`, the executor. It owns
+operation order, operation placement, tensor residency, tensor movement, and
+aggregation. It selects an operation evaluator per operation type from the
+evaluation profile and requires exactly one systolic-array endpoint and one FPGA
+endpoint for the first fixed placement policy.
 
-The FPGA estimator family lives in `system/utils/NonGemmEstimator.py`:
+An operation evaluator returns only compute latency and dynamic energy. The
+current evaluators live behind a registry:
 
-- `ReluComputeEstimator` derives `parallel_lanes` from the FPGA's CLB/BRAM/DSP
-  counts and the declared per-lane ReLU implementation profile, then computes
-  `ceil(elements / lanes)` cycles and the compute latency. It never invents a
-  lane count and returns an infeasible result when resources yield zero lanes.
-- `ReluStageComposer` composes the serialized input transfer, compute, and
-  output transfer.
-- `NonGemmEstimator` is the facade and operation dispatcher.
+- `LegacyScaleSimGemmEvaluator` wraps the existing SCALE-Sim GEMM path.
+- `FpgaReluEvaluator` in `system/utils/NonGemmEstimator.py` wraps the
+  resource-derived ReLU compute estimator.
 
-`system/utils/TransferEstimator.py` is operation-agnostic: it receives an
-already-resolved route and a tensor payload and returns byte count, latency, and
-energy. It does not resolve routes or inspect topology.
+`ReluComputeEstimator` derives `parallel_lanes` from the FPGA's CLB/BRAM/DSP
+counts and the declared per-lane ReLU implementation profile, then computes
+`ceil(elements / lanes)` cycles and the compute latency. It never invents a lane
+count and reports an unsupported evaluation when resources yield zero lanes.
 
-For `GEMM -> ReLU -> GEMM`, the producing GEMM runs with
-`output_to_dram = False` and the consuming GEMM runs with
-`activation_from_dram = False`; the ReLU stage owns both transfer legs. This
-gives every physical tensor movement exactly one accounting owner. Full details
-and the parser contract are in `docs/atlas_fpga_relu_v0.md`.
+`system/utils/TensorMovement.py` owns intermediate activation handoffs: it
+records tensor residency, resolves a route, and charges movement latency and
+dynamic energy exactly once. `system/utils/TransferEstimator.py` remains
+operation-agnostic: it receives an already-resolved route and a tensor payload
+and returns byte count, latency, and energy.
+
+The producing GEMM runs with `output_to_dram = False` and the consuming GEMM
+runs with `activation_from_dram = False` around an FPGA operation; the consumer
+owns the movement. Total energy is baseline architecture power over the elapsed
+latency plus evaluator dynamic energy plus movement energy. Full details and the
+graph contract are in `docs/atlas_graph_evaluation.md`.
 
 ### 5. GEMM Sequence and Scheduling
 
@@ -579,14 +581,22 @@ Technology-scaling tables:
 - `system/utils/ChipletSystem.py`: converts architecture dictionaries into
   systolic-array cores and FPGA endpoints plus a weighted interconnect graph,
   finds routes across all endpoints, and adjusts 3D memory paths.
-- `system/utils/AtlasWorkload.py`: normalized parser-workload front end for
-  sequential `gemm`/`relu` chains.
+- `system/utils/AtlasGraphAdapter.py`: direct raw ATLAS graph-dump front end for
+  sequential `Gemm`/`relu` chains.
+- `system/utils/OperationEvaluator.py`: evaluator contract, result type, and
+  evaluator registry.
+- `system/utils/EvaluationProfile.py`: named selection of evaluators, placement,
+  movement policy, and transfer model.
+- `system/utils/OperationPlacement.py`: operation-to-endpoint placement policy.
+- `system/utils/TensorMovement.py`: tensor residency ledger and movement plan.
+- `system/utils/UnsupportedEvaluation.py`: shared failure type for unmodeled
+  capabilities.
 - `system/utils/FpgaChiplet.py`: FPGA endpoint with resources and a per-lane
   ReLU implementation profile.
 - `system/utils/TransferEstimator.py`: resolved-route transfer latency and
   energy for an `int8` tensor payload.
-- `system/utils/NonGemmEstimator.py`: ReLU compute estimator, serialized stage
-  composer, and non-GEMM operation dispatcher.
+- `system/utils/NonGemmEstimator.py`: ReLU compute estimator and FPGA ReLU
+  operation evaluator.
 - `system/utils/Scheduler.py`: GEMM partitioning, core assignment, optional tile
   merging, DRAM/interconnect/reduction timing, and energy aggregation.
 - `system/utils/SimulationCache.py`: indexed CSV lookup, SCALE-Sim miss
@@ -598,10 +608,11 @@ Technology-scaling tables:
 
 - `cfg/examples/workload.json`: six legacy GEMM shapes, one chained two-GEMM
   example, and one four-identical-GEMM scaling example.
-- `cfg/examples/atlas_gemm_relu_gemm.json`: normalized parser workload with a
-  `GEMM -> ReLU -> GEMM` chain.
+- `cfg/examples/atlas/dense_relu_funnel.graph_dump.json`: raw ATLAS graph dump
+  for a dense-ReLU funnel, with its Keras source and provenance alongside it.
 - `cfg/examples/sa_fpga_architecture.json`: fixed one-SA plus one-FPGA
   architecture with a 2.5D link and a configured ReLU implementation profile.
+- `cfg/profiles/legacy_sa_fpga_v1.json`: default evaluation profile.
 - `cfg/parameters/`: design-space and physical-model inputs described under
   Model Parameters.
 - `cfg/calibration/calibration_1.json` through `calibration_6.json`: checked-in

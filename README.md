@@ -231,40 +231,36 @@ writes `summary.json`, `layers.csv`, `boundaries.csv`, `mapping.csv`, and
 `report.md`. A memory comparison writes `summary.json`, `policy_comparison.csv`,
 and `report.md`.
 
-#### Evaluate a parser workload with an FPGA ReLU
+#### Evaluate a direct ATLAS graph
 
-`network.py` also accepts normalized parser workloads
-(`"format": "atlas-normalized-v0"`) produced by the external ATLAS parser. V0
-supports a single `GEMM -> ReLU -> GEMM` chain over `int8` tensors, with the ReLU
-executed on one FPGA chiplet. The architecture declares the FPGA resources and a
-characterized per-lane ReLU implementation profile; the number of parallel lanes
-is derived from CLB/BRAM/DSP counts rather than assumed.
+`network.py` consumes the raw ATLAS graph dump (`--dump-graph` output) directly.
+CarbonPATH does not own or accept a normalized ATLAS workload format. The first
+profile supports one linear chain of constant-weight `Gemm` nodes and `relu`
+`Activation` nodes over `int8` tensors, with the ReLU executed on one FPGA
+chiplet. The architecture declares the FPGA resources and a characterized
+per-lane ReLU implementation profile; the number of parallel lanes is derived
+from CLB/BRAM/DSP counts rather than assumed.
 
-```json
-{
-  "format": "atlas-normalized-v0",
-  "name": "gemm_relu_gemm",
-  "operations": [ /* gemm, relu, gemm */ ]
-}
-```
+An evaluation profile names the operation evaluators, placement policy, tensor
+movement policy, and transfer cost model. The profile is recorded with the
+results so different model selections cannot be compared as if identical.
 
 Validate and evaluate:
 
 ```bash
 .venv/bin/python -m network validate \
-  --network cfg/examples/atlas_gemm_relu_gemm.json
+  --network cfg/examples/atlas/dense_relu_funnel.graph_dump.json
 
 .venv/bin/python -m network evaluate \
-  --network cfg/examples/atlas_gemm_relu_gemm.json \
+  --network cfg/examples/atlas/dense_relu_funnel.graph_dump.json \
   --architecture cfg/examples/sa_fpga_architecture.json \
-  --output-dir reports/networks/gemm_relu_gemm/evaluate
+  --output-dir reports/networks/dense_relu_funnel/evaluate
 ```
 
-The ReLU stage owns both SA-to-FPGA and FPGA-to-SA transfers, so the surrounding
-GEMMs do not also charge that movement as DRAM traffic. ReLU compute energy is
-reported only when an energy-per-element coefficient is configured. Calibration
-and `compare-memory` are not supported for parser workloads in V0. See
-`docs/atlas_fpga_relu_v0.md` for the full contract.
+Each intermediate activation moves between the producing endpoint and the
+consuming endpoint exactly once, and the consumer owns that movement. Calibration
+and `compare-memory` are not supported for ATLAS graphs. See
+`docs/atlas_graph_evaluation.md` for the full contract.
 
 #### Run optimizer experiments
 
