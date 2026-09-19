@@ -60,6 +60,10 @@ with open("cfg/examples/workload.json") as f:
     workload = json.load(f)
 WORKLOAD_CONFIGS = {int(k): v for k, v in workload.items()}
 CALIBRATION_MODEL_VERSION = 3
+CLI_INITIAL_TEMP = 40
+CLI_FREEZING_TEMP = 5e-4
+CLI_MAX_MOVE_PER_TEMP_STEP = 5
+CLI_COOLING_RATE = 0.3
 ######
 
 
@@ -565,6 +569,13 @@ def calibration_identity(
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def calibration_is_current(cost_averages, expected_identity, calibration_iterations):
+    return (
+        cost_averages.get("_calibration_identity") == expected_identity
+        and cost_averages.get("_calibration_samples") == calibration_iterations
+    )
+
+
 def validate_calibration(cost_averages):
     average_keys = {
         "avg_energy",
@@ -618,7 +629,9 @@ def get_calib_cost_avg(
         print(f"\n[INFO] --- Loading existing cost averages from {calibration_file_path} ---") if print_info else None
         with open(calibration_file_path, 'r') as f:
             cost_averages = json.load(f)
-        if cost_averages.get("_calibration_identity") == expected_identity:
+        if calibration_is_current(
+            cost_averages, expected_identity, calibration_iterations
+        ):
             validate_calibration(cost_averages)
             print(f"[INFO] --- Successfully loaded averages: {cost_averages} ---") if print_info else None
             return cost_averages
@@ -792,6 +805,7 @@ def get_calib_cost_avg(
     cost_averages = {
         "_calibration_model_version": CALIBRATION_MODEL_VERSION,
         "_calibration_identity": expected_identity,
+        "_calibration_samples": calibration_iterations,
         "avg_energy": avg_energy,  
         "avg_area": avg_area,
         "avg_dollar_cost": avg_cost,
@@ -1302,6 +1316,36 @@ if __name__ == "__main__":
                         help = "workload index to retrieve an ordered GEMM sequence")
     parser.add_argument("--iteration", type = int, default=1,
                         help="Number of iterations running, default is 1")
+    parser.add_argument(
+        "--calibration_iterations",
+        type=int,
+        default=10,
+        help="Number of random architectures used for calibration, default is 10",
+    )
+    parser.add_argument(
+        "--initial_temp",
+        type=float,
+        default=CLI_INITIAL_TEMP,
+        help="Starting simulated-annealing temperature",
+    )
+    parser.add_argument(
+        "--freezing_temp",
+        type=float,
+        default=CLI_FREEZING_TEMP,
+        help="Temperature at which simulated annealing stops",
+    )
+    parser.add_argument(
+        "--max_move_per_temp_step",
+        type=int,
+        default=CLI_MAX_MOVE_PER_TEMP_STEP,
+        help="Move proposals evaluated at each temperature level",
+    )
+    parser.add_argument(
+        "--cooling_rate",
+        type=float,
+        default=CLI_COOLING_RATE,
+        help="Temperature multiplier applied after each level",
+    )
     parser.add_argument("--run_name", type = str, default=None,
                         help="Name of current run, used to create work/log folder, default is None")
     parser.add_argument("--cache_file", type = str, default="cfg/static_cache/static_cache.csv",
@@ -1348,6 +1392,11 @@ if __name__ == "__main__":
     intermediate_policy = args.intermediate_policy
     architecture_file = args.architecture_file
     seed = args.seed
+    calibration_iterations = args.calibration_iterations
+    initial_temp = args.initial_temp
+    freezing_temp = args.freezing_temp
+    max_move_per_temp_step = args.max_move_per_temp_step
+    cooling_rate = args.cooling_rate
     #json_file_path = args.json_file_path
 
     if wl_idx is None:
@@ -1355,6 +1404,19 @@ if __name__ == "__main__":
         # parser.print_help()
         # exit(-1)
         wl_idx = 1
+
+    if iteration <= 0:
+        parser.error("--iteration must be positive")
+    if calibration_iterations <= 0:
+        parser.error("--calibration_iterations must be positive")
+    if initial_temp <= 0:
+        parser.error("--initial_temp must be positive")
+    if freezing_temp <= 0 or freezing_temp >= initial_temp:
+        parser.error("--freezing_temp must be positive and below --initial_temp")
+    if max_move_per_temp_step <= 0:
+        parser.error("--max_move_per_temp_step must be positive")
+    if not 0 < cooling_rate < 1:
+        parser.error("--cooling_rate must be between 0 and 1")
     
 
     workload_sequence = parse_workload_entry(wl_idx, WORKLOAD_CONFIGS[wl_idx])
@@ -1383,31 +1445,39 @@ if __name__ == "__main__":
 
     for i in range(iteration):
         iteration_seed = None if seed is None else seed + i
+        iteration_run_name = (
+            f"{file_run_name}_run{i + 1:02d}" if iteration > 1 else file_run_name
+        )
         if run_mode == "run_sim_anneal": #Runs Simulated Annealing
             start_time = time.time()
             best_cost, best_arch, sa_details_csv, sim_results_csv = sim_annealing(
                                                                 wl_idx=wl_idx,
                                                                 workload_sequence=workload_sequence,
                                                                 cache_file = cache_file,
-                                                                run_name=file_run_name,
+                                                                run_name=iteration_run_name,
                                                                 cost_profile=cost_profile,
-                                                                initial_temp=40, 
-                                                                freezing_temp=1e-3, 
-                                                                max_move_per_temp_step=5, #20
-                                                                cooling_rate=0.3,
-                                                                calibration_iterations=10,
+                                                                initial_temp=initial_temp,
+                                                                freezing_temp=freezing_temp,
+                                                                max_move_per_temp_step=max_move_per_temp_step,
+                                                                cooling_rate=cooling_rate,
+                                                                calibration_iterations=calibration_iterations,
                                                                 intermediate_policy=intermediate_policy,
                                                                 random_seed=iteration_seed,
                                                                 )
             
-            dump_results(sa_details_csv, sim_results_csv, best_arch, best_cost, file_run_name)
+            dump_results(
+                sa_details_csv,
+                sim_results_csv,
+                best_arch,
+                best_cost,
+                iteration_run_name,
+            )
             end_time = time.time()
             find_run_time(start_time,end_time)
         elif run_mode == "run_calibration": #Runs Calibration
             print(f"[INFO] Running Calibration only")
             start_time = time.time()
             
-            calibration_iterations = 10
             print(f"[INFO] Running calibration for {calibration_iterations} iterations to get variation data")
             
             if iteration_seed is not None:
@@ -1416,7 +1486,7 @@ if __name__ == "__main__":
                 wl_idx=wl_idx,
                 workload_sequence=workload_sequence,
                 cache_file=cache_file,
-                run_name=file_run_name,
+                run_name=iteration_run_name,
                 cost_profile=cost_profile,
                 calibration_iterations=calibration_iterations,
                 intermediate_policy=intermediate_policy,

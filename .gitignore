@@ -10,14 +10,19 @@ __pycache__/
 .DS_Store
 ._.DS_Store
 reports/
+cfg/static_cache/cache_*.csv
 cfg/calibration/calibration_*.csv
 cfg/calibration/calibration_7.json
 cfg/calibration/calibration_8.json
 cfg/gen_arch/wl*/
-wl*_1iteration_*/
+wl*_*iteration_*/
+logs/
 
 # Local research materials and generated exports
 ._*
 PATH-AI.pdf
 papers/
 asu-vda-lab-carbonpath-8a5edab282632443.txt
+
+# Local remote-server instructions
+docs/server_connection.local.md

@@ -102,8 +102,12 @@ class WorkloadSequenceTests(unittest.TestCase):
             workload["gemms"],
             [
                 {"name": "projection", "shape": (128, 256, 512)},
-                {"name": "head", "shape": (128, 512, 16)},
+                {"name": "head", "shape": (128, 512, 256)},
             ],
+        )
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            33_554_432,
         )
 
     def test_chained_gemms_require_compatible_output_and_input_shapes(self):

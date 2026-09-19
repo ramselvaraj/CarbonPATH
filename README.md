@@ -120,7 +120,7 @@ During the simulated annealing algorithm, the simulator is invoked only if a cac
 
 ### Fixed baseline campaign
 
-The reproducible fixed-schedule baseline campaign for workloads 7, 9, and 10 is managed by `script/run_baseline_campaign.py`. Workload 10 is a sequential projection-plus-head workload with shapes `[128, 256, 512]` and `[128, 512, 16]`.
+The reproducible fixed-schedule baseline campaign for workloads 7, 9, and 10 is managed by `script/run_baseline_campaign.py`. Workload 10 is a sequential projection-plus-head workload with shapes `[128, 256, 512]` and `[128, 512, 256]`.
 
 Workload 11 is a chained FFN surrogate using dimensions from workload 1: `[512, 768, 3072] -> [512, 3072, 768]`. It represents expansion and contraction only; activations, normalization, bias, and residual behavior are not modeled. Its intermediate is `1,572,864` int8 bytes and its total MAC count is `2,415,919,104`.
 
