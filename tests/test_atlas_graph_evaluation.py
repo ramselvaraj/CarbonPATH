@@ -47,12 +47,14 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 FIXTURE = Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json")
 SOFTMAX_FIXTURE = Path("cfg/examples/atlas/dense_softmax.graph_dump.json")
+MIXED_FIXTURE = Path("cfg/examples/atlas/dense_relu_softmax.graph_dump.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 PLACEHOLDER_PROFILE = Path("cfg/profiles/placeholder_fpga_ops_v0.json")
 
 EXPECTED_SHAPES = [(128, 128, 1024), (128, 1024, 512), (128, 512, 256), (128, 256, 64)]
 FUNNEL_FINGERPRINT = "810bd39b27e0"
 SOFTMAX_FINGERPRINT = "88cd5accb4ca"
+MIXED_FIXTURE_FINGERPRINT = "abf1849faedc"
 LEGACY_PROFILE_FINGERPRINT = "8f477eb548ff"
 PLACEHOLDER_PROFILE_FINGERPRINT = "269e1faefe2b"
 
@@ -211,10 +213,24 @@ class AtlasGraphAdapterTests(unittest.TestCase):
         ).fingerprint()
         self.assertNotEqual(baseline, changed)
 
+    def test_mixed_fixture_loads(self):
+        graph = load_atlas_graph(MIXED_FIXTURE)
+        types = [operation.operation_type for operation in graph.operations]
+        self.assertEqual(types, ["gemm", "relu", "gemm", "softmax", "gemm"])
+        gemm_shapes = [
+            operation.gemm_shape
+            for operation in graph.operations
+            if operation.operation_type == "gemm"
+        ]
+        self.assertEqual(gemm_shapes, [(8, 16, 16), (8, 16, 32), (8, 32, 8)])
+
     def test_fixture_fingerprints_are_pinned(self):
         self.assertEqual(load_atlas_graph(FIXTURE).fingerprint(), FUNNEL_FINGERPRINT)
         self.assertEqual(
             load_atlas_graph(SOFTMAX_FIXTURE).fingerprint(), SOFTMAX_FINGERPRINT
+        )
+        self.assertEqual(
+            load_atlas_graph(MIXED_FIXTURE).fingerprint(), MIXED_FIXTURE_FINGERPRINT
         )
 
 
@@ -496,6 +512,26 @@ class AtlasEvaluationTests(unittest.TestCase):
         self.assertEqual(softmax["evaluator_id"], "placeholder_fpga_softmax_v0")
         self.assertEqual(softmax["movement_source_endpoint"], 0)
         self.assertEqual(softmax["movement_destination_endpoint"], 1)
+
+    def test_mixed_workload_evaluates_with_placeholder_profile(self):
+        graph = load_atlas_graph(MIXED_FIXTURE)
+        profile = load_evaluation_profile(PLACEHOLDER_PROFILE)
+        evaluation, _ = self._evaluate(graph=graph, profile=profile)
+        summary = evaluation.summary
+        self.assertEqual(
+            summary["operation_counts"], {"gemm": 3, "relu": 1, "softmax": 1}
+        )
+        layers = evaluation.layers.set_index("layer_name")
+        self.assertEqual(layers.loc["stem_relu", "endpoint_kind"], "fpga")
+        self.assertEqual(layers.loc["softmax", "endpoint_kind"], "fpga")
+        self.assertEqual(layers.loc["softmax", "evaluator_id"], "placeholder_fpga_softmax_v0")
+        for name in ("stem_relu", "gemm_expand", "softmax", "gemm_head"):
+            self.assertEqual(layers.loc[name, "movement_method"], "route")
+        self.assertTrue(pd.isna(layers.loc["gemm_stem", "movement_method"]))
+        self.assertAlmostEqual(
+            summary["movement_energy_pj"],
+            layers["movement_energy_pj"].sum(),
+        )
 
     def test_legacy_network_rejects_evaluation_profile(self):
         with self.assertRaises(ValueError):

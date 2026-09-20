@@ -10,6 +10,8 @@ Keras sources are committed for provenance and reproducibility.
 - `dense_relu_funnel.graph_dump.json`: raw ATLAS graph dump.
 - `dense_softmax.keras.py`: Keras/HGQ2 model source.
 - `dense_softmax.graph_dump.json`: raw ATLAS graph dump.
+- `dense_relu_softmax.keras.py`: Keras/HGQ2 model source.
+- `dense_relu_softmax.graph_dump.json`: raw ATLAS graph dump.
 
 ## Provenance
 
@@ -42,6 +44,17 @@ Input(8,16)
 
 Expected operations: two `Gemm` nodes and one `Softmax` node with output shape
 `(8,16)` and `attrs.axis == -1`.
+
+## dense_relu_softmax
+
+```text
+Input(8,16)
+-> QDense(16) -> relu -> QDense(32) -> Softmax(axis=-1) -> QDense(8)
+```
+
+Expected operations: three `Gemm` nodes, one `relu` `Activation` node, and one
+`Softmax` node, in the order `gemm`, `relu`, `gemm`, `softmax`, `gemm`. The
+Softmax has output shape `(8,32)` and `attrs.axis == -1`.
 
 ## Regenerating
 
