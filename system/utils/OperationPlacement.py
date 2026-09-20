@@ -45,8 +45,22 @@ class FixedSingleSaSingleFpgaPlacement:
     def endpoint_for(self, operation_type):
         if operation_type == "gemm":
             return EndpointPlacement(self.sa_id, "sa")
-        if operation_type == "relu":
+        if operation_type in ("relu", "softmax"):
             return EndpointPlacement(self.fpga_id, "fpga")
         raise UnsupportedEvaluation(
             f"placement policy has no endpoint for operation type '{operation_type}'"
         )
+
+
+PLACEMENT_POLICIES = {
+    FixedSingleSaSingleFpgaPlacement.policy_id: FixedSingleSaSingleFpgaPlacement,
+}
+
+
+def build_placement_policy(policy_id, system):
+    """Resolve an evaluation profile's operation placement policy ID."""
+    try:
+        policy_class = PLACEMENT_POLICIES[policy_id]
+    except KeyError:
+        raise UnsupportedEvaluation(f"unknown placement policy '{policy_id}'")
+    return policy_class(system)

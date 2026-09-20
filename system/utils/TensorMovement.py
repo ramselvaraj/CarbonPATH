@@ -108,3 +108,17 @@ class TensorMovementService:
             latency_ns=estimate.latency_ns,
             energy_pj=estimate.energy_pj,
         )
+
+
+MOVEMENT_POLICIES = {
+    TensorMovementService.policy_id: TensorMovementService,
+}
+
+
+def build_movement_service(policy_id, transfer_estimator=None):
+    """Resolve an evaluation profile's tensor movement policy ID."""
+    try:
+        policy_class = MOVEMENT_POLICIES[policy_id]
+    except KeyError:
+        raise UnsupportedEvaluation(f"unknown tensor movement policy '{policy_id}'")
+    return policy_class(transfer_estimator)

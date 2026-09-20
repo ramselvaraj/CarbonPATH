@@ -7,11 +7,14 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from main import evaluate_atlas_graph
-from network import evaluate_atlas_network
+from main import (
+    TensorAccessPlan,
+    build_default_evaluator_registry,
+    evaluate_atlas_graph,
+)
+from network import evaluate_atlas_network, evaluate_network
 from system.utils.AtlasGraphAdapter import (
-    GemmOperation,
-    ReluOperation,
+    AtlasOperation,
     load_atlas_graph,
     parse_atlas_graph,
 )
@@ -19,17 +22,47 @@ from system.utils.EvaluationProfile import (
     DEFAULT_PROFILE_PATH,
     load_evaluation_profile,
 )
-from system.utils.OperationPlacement import FixedSingleSaSingleFpgaPlacement
+from system.utils.NonGemmEstimator import (
+    LegacyReluInputAdapter,
+    PlaceholderHlsReluInputAdapter,
+    PlaceholderSoftmaxInputAdapter,
+)
+from system.utils.OperationEvaluator import EvaluatorRegistry
+from system.utils.OperationPlacement import (
+    FixedSingleSaSingleFpgaPlacement,
+    build_placement_policy,
+)
 from system.utils.SimulationCache import SimulationCache
 from system.utils.Simulator import Simulator
-from system.utils.TensorMovement import TensorMovementService
+from system.utils.TensorMovement import (
+    TensorMovementService,
+    build_movement_service,
+)
+from system.utils.TransferEstimator import (
+    TransferEstimator,
+    build_transfer_cost_model,
+)
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 FIXTURE = Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json")
+SOFTMAX_FIXTURE = Path("cfg/examples/atlas/dense_softmax.graph_dump.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
+PLACEHOLDER_PROFILE = Path("cfg/profiles/placeholder_fpga_ops_v0.json")
 
 EXPECTED_SHAPES = [(128, 128, 1024), (128, 1024, 512), (128, 512, 256), (128, 256, 64)]
+FUNNEL_FINGERPRINT = "810bd39b27e0"
+SOFTMAX_FINGERPRINT = "88cd5accb4ca"
+LEGACY_PROFILE_FINGERPRINT = "8f477eb548ff"
+PLACEHOLDER_PROFILE_FINGERPRINT = "269e1faefe2b"
+
+GOLDEN = {
+    "latency_ns": 133648.7947773606,
+    "baseline_energy_pj": 416817178.7118933,
+    "compute_energy_pj": 105521570.86836326,
+    "movement_energy_pj": 1835008.0,
+    "total_energy_pj": 524173757.5802566,
+}
 
 CACHE_COLUMNS = [
     "core_size",
@@ -81,6 +114,12 @@ class AtlasGraphAdapterTests(unittest.TestCase):
         self.assertEqual(types, ["gemm", "relu"] * 3 + ["gemm"])
         self.assertEqual(graph.dtype, "int8")
 
+    def test_operations_share_one_type(self):
+        graph = load_atlas_graph(FIXTURE)
+        self.assertTrue(
+            all(isinstance(operation, AtlasOperation) for operation in graph.operations)
+        )
+
     def test_gemm_shapes_come_from_atlas(self):
         graph = load_atlas_graph(FIXTURE)
         shapes = [
@@ -99,6 +138,15 @@ class AtlasGraphAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(counts, [128 * 1024, 128 * 512, 128 * 256])
 
+    def test_softmax_fixture_loads(self):
+        graph = load_atlas_graph(SOFTMAX_FIXTURE)
+        types = [operation.operation_type for operation in graph.operations]
+        self.assertEqual(types, ["gemm", "softmax", "gemm"])
+        softmax = graph.operations[1]
+        self.assertIsNone(softmax.gemm_shape)
+        self.assertEqual(softmax.element_count, 8 * 16)
+        self.assertEqual(softmax.source.attribute("axis"), -1)
+
     def test_unbatched_rank_one_gemm_becomes_m1(self):
         node = _gemm_node(
             inputs=[{"name": "x", "shape": [64]}],
@@ -106,21 +154,45 @@ class AtlasGraphAdapterTests(unittest.TestCase):
             weights=[{"name": "w", "shape": [32, 64]}],
         )
         operation = parse_atlas_graph([node], "unbatched").operations[0]
-        self.assertIsInstance(operation, GemmOperation)
+        self.assertIsInstance(operation, AtlasOperation)
         self.assertEqual(operation.gemm_shape, (1, 64, 32))
 
     def test_relu_parses_without_carbonpath_envelope(self):
         operation = parse_atlas_graph([_relu_node()], "relu_only").operations[0]
-        self.assertIsInstance(operation, ReluOperation)
+        self.assertIsInstance(operation, AtlasOperation)
         self.assertEqual(operation.element_count, 128 * 256)
 
+    def test_source_view_exposes_reuse_factor(self):
+        graph = load_atlas_graph(FIXTURE)
+        relu = next(
+            operation
+            for operation in graph.operations
+            if operation.operation_type == "relu"
+        )
+        self.assertEqual(relu.source.attribute("reuse_factor"), 1)
+
+    def test_source_view_is_immutable(self):
+        operation = parse_atlas_graph([_relu_node()], "relu_only").operations[0]
+        with self.assertRaises(TypeError):
+            operation.source.attrs["activation"] = "gelu"
+        self.assertIsInstance(operation.source.weights, tuple)
+
+    def test_missing_reuse_factor_is_not_a_graph_error(self):
+        operation = parse_atlas_graph(
+            [_relu_node(attrs={"activation": "relu"})], "relu_only"
+        ).operations[0]
+        self.assertIsNone(operation.source.attribute("reuse_factor", None))
+
     def test_unsupported_node_class_is_rejected(self):
-        nodes = [_gemm_node(), {"name": "softmax", "class": "Softmax", "attrs": {}}]
+        nodes = [_gemm_node(), {"name": "pool", "class": "Pooling", "attrs": {}}]
         with self.assertRaises(UnsupportedEvaluation):
             parse_atlas_graph(nodes, "bad")
 
     def test_non_linear_chain_is_rejected(self):
-        nodes = [_gemm_node(), _relu_node(inputs=[{"name": "someone_else", "shape": [128, 256]}])]
+        nodes = [
+            _gemm_node(),
+            _relu_node(inputs=[{"name": "someone_else", "shape": [128, 256]}]),
+        ]
         with self.assertRaises(UnsupportedEvaluation):
             parse_atlas_graph(nodes, "bad")
 
@@ -132,6 +204,19 @@ class AtlasGraphAdapterTests(unittest.TestCase):
         graph = load_atlas_graph(FIXTURE)
         self.assertEqual(graph.fingerprint(), load_atlas_graph(FIXTURE).fingerprint())
 
+    def test_fingerprint_covers_full_artifact(self):
+        baseline = parse_atlas_graph([_relu_node()], "x").fingerprint()
+        changed = parse_atlas_graph(
+            [_relu_node(attrs={"activation": "relu", "table_size": 2048})], "x"
+        ).fingerprint()
+        self.assertNotEqual(baseline, changed)
+
+    def test_fixture_fingerprints_are_pinned(self):
+        self.assertEqual(load_atlas_graph(FIXTURE).fingerprint(), FUNNEL_FINGERPRINT)
+        self.assertEqual(
+            load_atlas_graph(SOFTMAX_FIXTURE).fingerprint(), SOFTMAX_FINGERPRINT
+        )
+
 
 class EvaluationProfileTests(unittest.TestCase):
     def test_default_profile_maps_operation_types(self):
@@ -140,9 +225,126 @@ class EvaluationProfileTests(unittest.TestCase):
         self.assertEqual(profile.evaluator_id_for("relu"), "legacy_fpga_relu_v1")
         self.assertTrue(DEFAULT_PROFILE_PATH.exists())
 
+    def test_placeholder_profile_maps_placeholder_models(self):
+        profile = load_evaluation_profile(PLACEHOLDER_PROFILE)
+        self.assertEqual(profile.evaluator_id_for("relu"), "placeholder_hls_relu_v0")
+        self.assertEqual(
+            profile.evaluator_id_for("softmax"), "placeholder_fpga_softmax_v0"
+        )
+
+    def test_profile_fingerprints_are_pinned(self):
+        self.assertEqual(
+            load_evaluation_profile().fingerprint(), LEGACY_PROFILE_FINGERPRINT
+        )
+        self.assertEqual(
+            load_evaluation_profile(PLACEHOLDER_PROFILE).fingerprint(),
+            PLACEHOLDER_PROFILE_FINGERPRINT,
+        )
+
     def test_unknown_operation_type_is_unsupported(self):
         with self.assertRaises(UnsupportedEvaluation):
-            load_evaluation_profile().evaluator_id_for("softmax")
+            load_evaluation_profile().evaluator_id_for("layernorm")
+
+
+class InputAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.access_plan = TensorAccessPlan(
+            activation_from_dram=True, output_to_dram=False
+        )
+
+    def test_legacy_relu_adapter_needs_only_element_count(self):
+        operation = parse_atlas_graph(
+            [_relu_node(attrs={"activation": "relu"})], "relu_only"
+        ).operations[0]
+        evaluator_input = LegacyReluInputAdapter().build_input(
+            operation, self.access_plan
+        )
+        self.assertEqual(evaluator_input.element_count, 128 * 256)
+
+    def test_hls_relu_adapter_reads_reuse_factor(self):
+        operation = parse_atlas_graph(
+            [_relu_node(attrs={"activation": "relu", "reuse_factor": 4})],
+            "relu_only",
+        ).operations[0]
+        evaluator_input = PlaceholderHlsReluInputAdapter().build_input(
+            operation, self.access_plan
+        )
+        self.assertEqual(evaluator_input.reuse_factor, 4)
+
+    def test_hls_relu_adapter_rejects_missing_reuse_factor(self):
+        operation = parse_atlas_graph(
+            [_relu_node(attrs={"activation": "relu"})], "relu_only"
+        ).operations[0]
+        with self.assertRaises(UnsupportedEvaluation):
+            PlaceholderHlsReluInputAdapter().build_input(operation, self.access_plan)
+
+    def test_hls_relu_adapter_rejects_wrong_operation_type(self):
+        operation = parse_atlas_graph([_gemm_node()], "gemm_only").operations[0]
+        with self.assertRaises(UnsupportedEvaluation):
+            PlaceholderHlsReluInputAdapter().build_input(operation, self.access_plan)
+
+    def test_softmax_adapter_reads_axis(self):
+        graph = load_atlas_graph(SOFTMAX_FIXTURE)
+        softmax = graph.operations[1]
+        evaluator_input = PlaceholderSoftmaxInputAdapter().build_input(
+            softmax, self.access_plan
+        )
+        self.assertEqual(evaluator_input.axis, -1)
+        self.assertEqual(evaluator_input.element_count, 8 * 16)
+
+
+class RegistryTests(unittest.TestCase):
+    def test_built_in_evaluators_resolve(self):
+        registry = build_default_evaluator_registry()
+        for evaluator_id in (
+            "legacy_scale_sim_gemm_v1",
+            "legacy_fpga_relu_v1",
+            "placeholder_hls_relu_v0",
+            "placeholder_fpga_softmax_v0",
+        ):
+            self.assertIn(evaluator_id, registry)
+            self.assertEqual(registry.get(evaluator_id).evaluator_id, evaluator_id)
+
+    def test_unknown_evaluator_is_unsupported(self):
+        with self.assertRaises(UnsupportedEvaluation):
+            build_default_evaluator_registry().get("nope")
+
+    def test_duplicate_evaluator_is_rejected(self):
+        registry = EvaluatorRegistry()
+        binding = build_default_evaluator_registry().get("legacy_fpga_relu_v1")
+        registry.register(binding.evaluator, binding.input_adapter)
+        with self.assertRaises(ValueError):
+            registry.register(binding.evaluator, binding.input_adapter)
+
+    def test_placement_policy_resolves_by_id(self):
+        system = SimpleNamespace(core_dict={0: object()}, fpga_chiplet_dict={1: object()})
+        policy = build_placement_policy("fixed_single_sa_single_fpga_v1", system)
+        self.assertEqual(policy.endpoint_for("gemm").endpoint_id, 0)
+        self.assertEqual(policy.endpoint_for("relu").endpoint_kind, "fpga")
+        self.assertEqual(policy.endpoint_for("softmax").endpoint_kind, "fpga")
+
+    def test_unknown_placement_policy_is_unsupported(self):
+        system = SimpleNamespace(core_dict={0: object()}, fpga_chiplet_dict={1: object()})
+        with self.assertRaises(UnsupportedEvaluation):
+            build_placement_policy("nope", system)
+
+    def test_movement_policy_resolves_by_id(self):
+        service = build_movement_service(
+            "activation_boundary_v1", TransferEstimator()
+        )
+        self.assertIsInstance(service, TensorMovementService)
+
+    def test_unknown_movement_policy_is_unsupported(self):
+        with self.assertRaises(UnsupportedEvaluation):
+            build_movement_service("nope", TransferEstimator())
+
+    def test_transfer_cost_model_resolves_by_id(self):
+        model = build_transfer_cost_model("route_transfer_v1")
+        self.assertIsInstance(model, TransferEstimator)
+
+    def test_unknown_transfer_cost_model_is_unsupported(self):
+        with self.assertRaises(UnsupportedEvaluation):
+            build_transfer_cost_model("nope")
 
 
 class PlacementTests(unittest.TestCase):
@@ -185,7 +387,7 @@ class AtlasEvaluationTests(unittest.TestCase):
         pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_path, index=False)
         return SimulationCache(cache_path, simulator_dir=directory.name)
 
-    def _evaluate(self):
+    def _evaluate(self, graph=None, profile=None):
         cache = self._cache()
         original = Simulator.simulate_single_core
         with patch.object(
@@ -194,14 +396,20 @@ class AtlasEvaluationTests(unittest.TestCase):
             autospec=True,
             side_effect=original,
         ) as simulate_core:
-            evaluation = evaluate_atlas_network(self.graph, self.architecture, cache)
+            evaluation = evaluate_atlas_network(
+                graph or self.graph, self.architecture, cache, profile=profile
+            )
         return evaluation, simulate_core
+
+    def _assert_close(self, value, expected):
+        self.assertLessEqual(abs(value - expected), abs(expected) * 1e-9 + 1e-6)
 
     def test_operation_counts(self):
         evaluation, _ = self._evaluate()
         self.assertEqual(evaluation.summary["gemm_count"], 4)
         self.assertEqual(evaluation.summary["relu_count"], 3)
         self.assertEqual(evaluation.summary["operation_count"], 7)
+        self.assertEqual(evaluation.summary["operation_counts"], {"gemm": 4, "relu": 3})
 
     def test_first_gemm_output_does_not_write_dram_before_relu(self):
         cache = self._cache()
@@ -254,6 +462,44 @@ class AtlasEvaluationTests(unittest.TestCase):
         evaluation, _ = self._evaluate()
         self.assertEqual(evaluation.summary["evaluation_profile"], "legacy_sa_fpga_v1")
         self.assertTrue(evaluation.summary["evaluation_profile_fingerprint"])
+
+    def test_legacy_result_is_pinned(self):
+        evaluation, _ = self._evaluate()
+        summary = evaluation.summary
+        self._assert_close(summary["latency_ns"], GOLDEN["latency_ns"])
+        self._assert_close(summary["baseline_energy_pj"], GOLDEN["baseline_energy_pj"])
+        self._assert_close(summary["compute_energy_pj"], GOLDEN["compute_energy_pj"])
+        self._assert_close(summary["movement_energy_pj"], GOLDEN["movement_energy_pj"])
+        self._assert_close(summary["total_energy_pj"], GOLDEN["total_energy_pj"])
+
+    def test_placeholder_profile_swaps_relu_model_without_graph_change(self):
+        profile = load_evaluation_profile(PLACEHOLDER_PROFILE)
+        evaluation, _ = self._evaluate(profile=profile)
+        self.assertEqual(evaluation.summary["operation_counts"], {"gemm": 4, "relu": 3})
+        relu_rows = evaluation.layers[
+            evaluation.layers["operation_type"] == "relu"
+        ]
+        self.assertTrue(
+            (relu_rows["evaluator_id"] == "placeholder_hls_relu_v0").all()
+        )
+
+    def test_softmax_graph_evaluates_on_fpga(self):
+        graph = load_atlas_graph(SOFTMAX_FIXTURE)
+        profile = load_evaluation_profile(PLACEHOLDER_PROFILE)
+        evaluation, _ = self._evaluate(graph=graph, profile=profile)
+        summary = evaluation.summary
+        self.assertEqual(summary["operation_counts"], {"gemm": 2, "softmax": 1})
+        softmax = evaluation.layers[
+            evaluation.layers["operation_type"] == "softmax"
+        ].iloc[0]
+        self.assertEqual(softmax["endpoint_kind"], "fpga")
+        self.assertEqual(softmax["evaluator_id"], "placeholder_fpga_softmax_v0")
+        self.assertEqual(softmax["movement_source_endpoint"], 0)
+        self.assertEqual(softmax["movement_destination_endpoint"], 1)
+
+    def test_legacy_network_rejects_evaluation_profile(self):
+        with self.assertRaises(ValueError):
+            evaluate_network(SimpleNamespace(), {}, None, profile=object())
 
 
 if __name__ == "__main__":

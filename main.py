@@ -40,15 +40,24 @@ from system.utils.IntermediateMemoryPolicy import (
 )
 from system.utils.ArchitectureIdentity import architecture_fingerprint
 from system.utils.EvaluationProfile import load_evaluation_profile
-from system.utils.NonGemmEstimator import FpgaReluEvaluator
+from system.utils.NonGemmEstimator import (
+    FpgaReluEvaluator,
+    LegacyReluInputAdapter,
+    PlaceholderHlsReluEvaluator,
+    PlaceholderHlsReluInputAdapter,
+    PlaceholderSoftmaxEvaluator,
+    PlaceholderSoftmaxInputAdapter,
+)
 from system.utils.OperationEvaluator import (
     EvaluationContext,
     EvaluatorRegistry,
     OperationEstimate,
     OperationEvaluator,
+    OperationInputAdapter,
 )
-from system.utils.OperationPlacement import FixedSingleSaSingleFpgaPlacement
-from system.utils.TensorMovement import TensorMovementService, TensorResidency
+from system.utils.OperationPlacement import build_placement_policy
+from system.utils.TensorMovement import TensorResidency, build_movement_service
+from system.utils.TransferEstimator import build_transfer_cost_model
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from config import print_info, fast_test, latency_en, sram_selection_mode
 
@@ -239,6 +248,44 @@ def simulate_latency_energy(
     return latency_ns, energy_pj, sram_energy_pj, gemm_metrics, boundary_plans
 
 
+@dataclass(frozen=True)
+class LegacyScaleSimGemmInput:
+    operation_id: str
+    m: int
+    k: int
+    n: int
+    activation_from_dram: bool
+    output_to_dram: bool
+
+
+class LegacyScaleSimGemmInputAdapter(OperationInputAdapter):
+    """Input adapter for the legacy SCALE-Sim GEMM path."""
+
+    input_adapter_id = "legacy_scale_sim_gemm_input_v1"
+    operation_type = "gemm"
+
+    def build_input(self, operation, access_plan):
+        if operation.operation_type != "gemm":
+            raise UnsupportedEvaluation(
+                f"LegacyScaleSimGemmInputAdapter cannot read "
+                f"'{operation.operation_type}' operation "
+                f"'{operation.operation_id}'"
+            )
+        if operation.gemm_shape is None:
+            raise UnsupportedEvaluation(
+                f"{operation.operation_id}: GEMM dimensions are missing"
+            )
+        m, k, n = operation.gemm_shape
+        return LegacyScaleSimGemmInput(
+            operation_id=operation.operation_id,
+            m=m,
+            k=k,
+            n=n,
+            activation_from_dram=access_plan.activation_from_dram,
+            output_to_dram=access_plan.output_to_dram,
+        )
+
+
 class LegacyScaleSimGemmEvaluator(OperationEvaluator):
     """Operation evaluator wrapping the existing SCALE-Sim GEMM path.
 
@@ -248,25 +295,22 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
     """
 
     evaluator_id = "legacy_scale_sim_gemm_v1"
+    operation_type = "gemm"
+    input_adapter_id = "legacy_scale_sim_gemm_input_v1"
 
-    def evaluate(self, operation, placement, context) -> OperationEstimate:
-        if operation.operation_type != "gemm":
-            raise UnsupportedEvaluation(
-                f"LegacyScaleSimGemmEvaluator cannot evaluate "
-                f"'{operation.operation_type}'"
-            )
+    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
         result = simulate_single_gemm(
             context.cache,
             context.architecture,
-            operation.gemm_shape,
-            activation_from_dram=context.activation_from_dram,
-            output_to_dram=context.output_to_dram,
+            (evaluator_input.m, evaluator_input.k, evaluator_input.n),
+            activation_from_dram=evaluator_input.activation_from_dram,
+            output_to_dram=evaluator_input.output_to_dram,
         )
         dynamic_energy_pj = (
             result["dram_interconnect_energy_pj"] + result["sram_energy_pj"]
         )
         return OperationEstimate(
-            operation_id=operation.operation_id,
+            operation_id=evaluator_input.operation_id,
             evaluator_id=self.evaluator_id,
             compute_latency_ns=result["latency_ns"],
             dynamic_energy_pj=dynamic_energy_pj,
@@ -275,9 +319,31 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
 
 def build_default_evaluator_registry():
     registry = EvaluatorRegistry()
-    registry.register(LegacyScaleSimGemmEvaluator())
-    registry.register(FpgaReluEvaluator())
+    registry.register(
+        LegacyScaleSimGemmEvaluator(), LegacyScaleSimGemmInputAdapter()
+    )
+    registry.register(FpgaReluEvaluator(), LegacyReluInputAdapter())
+    registry.register(
+        PlaceholderHlsReluEvaluator(), PlaceholderHlsReluInputAdapter()
+    )
+    registry.register(
+        PlaceholderSoftmaxEvaluator(), PlaceholderSoftmaxInputAdapter()
+    )
     return registry
+
+
+@dataclass(frozen=True)
+class TensorAccessPlan:
+    """Type-neutral statement of where an operation's tensors come from and go.
+
+    The first operation reads its activation from DRAM and the last writes its
+    output to DRAM. Every other tensor is an intermediate that is resident or
+    moved by the tensor movement service. Evaluator input adapters translate
+    this plan into the facts their model needs.
+    """
+
+    activation_from_dram: bool
+    output_to_dram: bool
 
 
 @dataclass(frozen=True)
@@ -339,6 +405,7 @@ def evaluate_atlas_graph(
     graph,
     profile=None,
     transfer_model=None,
+    registry=None,
 ):
     """Evaluate a direct ATLAS graph on a chiplet architecture.
 
@@ -353,27 +420,23 @@ def evaluate_atlas_graph(
         else arch_dict.get("transfer_model", {})
     )
     system = ChipletSystem(arch_dict=arch_dict, BASE_FREQUENCY=FREQUENCY)
-    placement_policy = FixedSingleSaSingleFpgaPlacement(system)
-    movement_service = TensorMovementService()
-    registry = build_default_evaluator_registry()
+    placement_policy = build_placement_policy(profile.placement_policy, system)
+    movement_service = build_movement_service(
+        profile.movement_policy, build_transfer_cost_model(profile.transfer_model)
+    )
+    registry = registry or build_default_evaluator_registry()
 
     operations = graph.operations
     results = []
     residency = None
 
     for index, operation in enumerate(operations):
-        previous_type = operations[index - 1].operation_type if index > 0 else None
-        next_type = (
-            operations[index + 1].operation_type
-            if index + 1 < len(operations)
-            else None
-        )
         placement = placement_policy.endpoint_for(operation.operation_type)
 
         movement = None
         if residency is not None:
             movement = movement_service.move(
-                tensor_id=operation.input_tensor_id,
+                tensor_id=residency.tensor_id,
                 element_count=residency.element_count,
                 source_endpoint=residency.endpoint_id,
                 destination_endpoint=placement.endpoint_id,
@@ -381,15 +444,19 @@ def evaluate_atlas_graph(
                 transfer_model=transfer_model,
             )
 
-        evaluator = registry.get(profile.evaluator_id_for(operation.operation_type))
+        access_plan = TensorAccessPlan(
+            activation_from_dram=(index == 0),
+            output_to_dram=(index == len(operations) - 1),
+        )
+        binding = registry.get(profile.evaluator_id_for(operation.operation_type))
         context = EvaluationContext(
             cache=cache,
             architecture=arch_dict,
             system=system,
-            activation_from_dram=(previous_type != "relu"),
-            output_to_dram=(next_type != "relu"),
+            activation_from_dram=access_plan.activation_from_dram,
+            output_to_dram=access_plan.output_to_dram,
         )
-        estimate = evaluator.evaluate(operation, placement, context)
+        estimate = binding.estimate(operation, access_plan, placement, context)
 
         shape = operation.gemm_shape if operation.operation_type == "gemm" else None
         results.append(

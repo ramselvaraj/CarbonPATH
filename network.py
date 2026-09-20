@@ -21,6 +21,7 @@ from system.utils.AtlasGraphAdapter import (
     default_graph_name,
     parse_atlas_graph,
 )
+from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.IntermediateMemoryPolicy import INTERMEDIATE_POLICIES
 from system.utils.NetworkWorkload import (
     LinearNetwork,
@@ -136,12 +137,13 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
     layer_rows = [
         _atlas_operation_row(result, power) for result in evaluation.results
     ]
-    gemm_count = sum(
-        1 for result in evaluation.results if result.operation_type == "gemm"
-    )
-    relu_count = sum(
-        1 for result in evaluation.results if result.operation_type == "relu"
-    )
+    operation_counts = {}
+    for result in evaluation.results:
+        operation_counts[result.operation_type] = (
+            operation_counts.get(result.operation_type, 0) + 1
+        )
+    gemm_count = operation_counts.get("gemm", 0)
+    relu_count = operation_counts.get("relu", 0)
 
     summary = {
         "network": graph.name,
@@ -152,9 +154,12 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
         "evaluation_profile_fingerprint": evaluation.profile.fingerprint(),
         "layer_count": len(evaluation.results),
         "operation_count": len(evaluation.results),
+        "operation_counts": operation_counts,
         "gemm_count": gemm_count,
         "relu_count": relu_count,
+        "placement_policy": evaluation.profile.placement_policy,
         "movement_policy": evaluation.profile.movement_policy,
+        "transfer_model": evaluation.profile.transfer_model,
         "latency_ns": latency_ns,
         "baseline_energy_pj": baseline_energy_pj,
         "compute_energy_pj": compute_energy_pj,
@@ -185,10 +190,16 @@ def evaluate_network(
     intermediate_policy=None,
     cost_profile="t1",
     calibration=None,
+    profile=None,
 ):
     if isinstance(network, AtlasGraph):
         return evaluate_atlas_network(
-            network, architecture, cache, intermediate_policy
+            network, architecture, cache, intermediate_policy, profile=profile
+        )
+
+    if profile is not None:
+        raise ValueError(
+            "an evaluation profile is only supported for ATLAS graph evaluation"
         )
 
     policy = intermediate_policy or network.intermediate_policy
@@ -572,6 +583,11 @@ def main():
             command_parser.add_argument(
                 "--memory-policy", choices=INTERMEDIATE_POLICIES
             )
+            command_parser.add_argument(
+                "--evaluation-profile",
+                type=Path,
+                help="ATLAS graph evaluation profile JSON (default: legacy profile)",
+            )
 
     calibrate_parser = subparsers.add_parser("calibrate")
     calibrate_parser.add_argument("--network", type=Path, required=True)
@@ -604,6 +620,15 @@ def main():
             )
             _print_compiled_network(network)
         return
+
+    profile = None
+    evaluation_profile_path = getattr(args, "evaluation_profile", None)
+    if evaluation_profile_path is not None:
+        if not isinstance(network, AtlasGraph):
+            raise ValueError(
+                "--evaluation-profile is only supported for ATLAS graph evaluation"
+            )
+        profile = load_evaluation_profile(evaluation_profile_path)
 
     if isinstance(network, AtlasGraph) and args.command == "calibrate":
         raise ValueError("Calibration is not supported for ATLAS graph evaluation")
@@ -678,6 +703,7 @@ def main():
             intermediate_policy=args.memory_policy,
             cost_profile=args.cost_profile,
             calibration=calibration,
+            profile=profile,
         )
         write_network_evaluation(evaluation, output_dir)
         cache.dump_cache()

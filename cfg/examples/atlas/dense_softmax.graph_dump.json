@@ -1,0 +1,247 @@
+[
+  {
+    "index": 1,
+    "name": "input_layer",
+    "class": "Input",
+    "inputs": [
+      {
+        "name": "input",
+        "shape": null,
+        "precision": "?"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "input_layer",
+      "class_name": "InputLayer",
+      "module": "keras.src.layers.core.input_layer",
+      "input_keras_tensor_names": [],
+      "input_shape": [
+        8,
+        16
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor"
+      ],
+      "inputs": [],
+      "index": 1,
+      "trace": false,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "reuse_factor": 1,
+      "target_cycles": null
+    }
+  },
+  {
+    "index": 7,
+    "name": "gemm_before",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "input_layer",
+        "shape": [
+          8,
+          16
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<18,6,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight7",
+        "shape": [
+          16,
+          16
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "1"
+      },
+      {
+        "name": "bias7",
+        "shape": [
+          16
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "16"
+      }
+    ],
+    "attrs": {
+      "n_in": 16,
+      "n_out": 16,
+      "n_patches": 8,
+      "gemm_m": 8,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        8,
+        16
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 7,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config7 : nnet::gemm_config {\n    static const unsigned n_in = 16;\n    static const unsigned n_out = 16;\n    static const unsigned n_patches = 8;\n    static const unsigned gemm_m = 8;\n    static const unsigned gemm_k = 16;\n    static const unsigned gemm_n = 16;\n    static const unsigned gemm_ip_id = 7;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 256;\n    typedef gemm_before_weight_t weight_t;\n    typedef gemm_before_bias_t bias_t;\n    typedef gemm_before_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight7_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight7_gemm_cols; }\n    static bias_t* gemm_bias() { return bias7; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<input_layer_t, layer7_t, config7>(input_layer, layer7_out);"
+    }
+  },
+  {
+    "index": 4,
+    "name": "softmax",
+    "class": "Softmax",
+    "inputs": [
+      {
+        "name": "before",
+        "shape": [
+          8,
+          16
+        ],
+        "precision": "fixed<18,6,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "softmax",
+      "class_name": "Softmax",
+      "module": "keras.src.layers.activations.softmax",
+      "input_keras_tensor_names": [
+        "keras_tensor_1"
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor_2"
+      ],
+      "axis": -1,
+      "activation": "softmax",
+      "n_outer": 8,
+      "n_inner": 1,
+      "inputs": [
+        "before"
+      ],
+      "index": 4,
+      "n_in": 128,
+      "trace": false,
+      "reuse_factor": 1,
+      "table_size": 1024,
+      "implementation": "stable",
+      "skip": false,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "target_cycles": null,
+      "config_cpp": "struct softmax_config4 : nnet::activ_config {\n    static const unsigned n_in = 128;\n    static const unsigned n_slice = 16;\n    static const unsigned n_outer = 8;\n    static const unsigned n_inner = 1;\n    static const unsigned parallelization_factor = -1;\n    static const unsigned exp_table_size = 1024;\n    static const unsigned inv_table_size = 1024;\n    static const unsigned io_type = nnet::io_stream;\n    static const unsigned reuse_factor = 1;\n    static const unsigned axis = -1;\n    static const nnet::softmax_implementation implementation = nnet::softmax_implementation::stable;\n    static constexpr float exp_scale = 1.0;\n    typedef softmax_exp_table_t exp_table_t;\n    typedef softmax_inv_table_t inv_table_t;\n    typedef model_default_t accum_t;\n    typedef softmax_inv_inp_t inv_inp_t;\n    typedef ap_ufixed<17, 5> inp_norm_t;\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_activation.h",
+        "nnet_utils/nnet_activation_stream.h"
+      ],
+      "function_cpp": "nnet::softmax<layer7_t, softmax_t, softmax_config4>(layer7_out, layer4_out);"
+    }
+  },
+  {
+    "index": 8,
+    "name": "gemm_head",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "softmax",
+        "shape": [
+          8,
+          16
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        4
+      ],
+      "precision": "fixed<18,6,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight8",
+        "shape": [
+          4,
+          16
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias8",
+        "shape": [
+          4
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "4"
+      }
+    ],
+    "attrs": {
+      "n_in": 16,
+      "n_out": 4,
+      "n_patches": 8,
+      "gemm_m": 8,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        8,
+        4
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 8,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config8 : nnet::gemm_config {\n    static const unsigned n_in = 16;\n    static const unsigned n_out = 4;\n    static const unsigned n_patches = 8;\n    static const unsigned gemm_m = 8;\n    static const unsigned gemm_k = 16;\n    static const unsigned gemm_n = 4;\n    static const unsigned gemm_ip_id = 8;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 64;\n    typedef gemm_head_weight_t weight_t;\n    typedef gemm_head_bias_t bias_t;\n    typedef gemm_head_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight8_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight8_gemm_cols; }\n    static bias_t* gemm_bias() { return bias8; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<softmax_t, result_t, config8>(layer4_out, layer8_out);"
+    }
+  }
+]

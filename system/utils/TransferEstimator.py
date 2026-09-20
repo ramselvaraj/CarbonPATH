@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
+
 
 @dataclass(frozen=True)
 class ResolvedRoute:
@@ -66,6 +68,8 @@ def _validate_route(route):
 class TransferEstimator:
     """Estimate the latency and energy of moving one int8 tensor over a route."""
 
+    model_id = "route_transfer_v1"
+
     def estimate(self, request: TransferRequest) -> TransferEstimate:
         if not isinstance(request.tensor_id, str) or not request.tensor_id:
             raise ValueError("transfer request must have a non-empty tensor_id")
@@ -102,3 +106,15 @@ class TransferEstimator:
             energy_pj=energy_pj,
             path=route.path,
         )
+
+
+TRANSFER_COST_MODELS = {TransferEstimator.model_id: TransferEstimator}
+
+
+def build_transfer_cost_model(model_id):
+    """Resolve an evaluation profile's transfer cost model ID."""
+    try:
+        model_class = TRANSFER_COST_MODELS[model_id]
+    except KeyError:
+        raise UnsupportedEvaluation(f"unknown transfer cost model '{model_id}'")
+    return model_class()

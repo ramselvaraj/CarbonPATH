@@ -11,6 +11,22 @@ A versioned graph JSON artifact emitted by ATLAS. It is CarbonPATH's external
 workload source, rather than a CarbonPATH-owned normalized workload format.
 _Avoid_: parser workload, normalized ATLAS workload
 
+**ATLAS operation**:
+One immutable CarbonPATH view of a recognized ATLAS graph node. It provides the
+generic execution facts (operation type, input and output tensors, GEMM
+dimensions) and a read-only ATLAS source view.
+_Avoid_: node, parsed node
+
+**ATLAS source view**:
+The immutable, typed access path to the original facts of one ATLAS node. Only
+an operation input adapter uses it, to build an evaluator input view.
+_Avoid_: raw node, attrs dictionary
+
+**Operation input adapter**:
+The evaluator-owned adapter that turns an ATLAS operation and tensor access plan
+into the operation-specific input view required by one operation evaluator.
+_Avoid_: operation handler, parser
+
 **Operation evaluator**:
 A replaceable model that estimates one graph operation at an assigned endpoint
 from an operation-specific input view.
