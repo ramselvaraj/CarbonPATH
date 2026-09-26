@@ -62,6 +62,30 @@ A replaceable model that estimates latency and dynamic energy for one planned
 tensor movement over a resolved path.
 _Avoid_: routing policy, operation evaluator
 
+**Modular design point**:
+One fixed architecture paired with one fixed evaluation profile, evaluated by the
+modular executor. It is the unit that modular annealing proposes, scores, and
+accepts or rejects. The ATLAS graph is fixed for the whole search.
+_Avoid_: candidate, configuration
+
+**ATLAS objective**:
+A replaceable model that turns one modular design point's raw metrics (latency,
+energy, area, cost, carbon) into the single scalar the search minimizes. The
+default is the uncalibrated `raw_weighted_sum_v0`.
+_Avoid_: cost function, calibration
+
+**Candidate profile catalog**:
+The named set of evaluation profiles a modular search may choose from, listed by
+the atlas search space. A candidate profile is a complete evaluation profile, not
+a partial override.
+_Avoid_: profile list, estimator mode
+
+**Placeholder policy**:
+A deliberately bad movement, transfer, or evaluator model used only to check that
+the search penalizes a known bad policy and does not select it. Placeholder
+policies are not hardware characterizations and are isolated for deletion.
+_Avoid_: baseline, reference policy
+
 **Unsupported evaluation**:
 An evaluation that cannot run because its ATLAS graph, evaluation profile, or
 architecture uses a capability CarbonPATH does not yet model.

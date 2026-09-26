@@ -338,6 +338,16 @@ owns the movement. Total energy is baseline architecture power over the elapsed
 latency plus evaluator dynamic energy plus movement energy. Full details and the
 graph contract are in `docs/atlas_graph_evaluation.md`.
 
+`main.sim_annealing` can search modular design points directly. Given an
+`atlas_graph`, it evaluates `(architecture, evaluation profile)` pairs with
+`main.evaluate_atlas_design_point`, scores them with a replaceable
+`system/utils/AtlasObjective.py` model (default uncalibrated
+`raw_weighted_sum_v0`), and mutates them with
+`system/utils/AtlasAnnealingMoves.py`, which keeps exactly one SA and one FPGA
+endpoint. The ATLAS graph is fixed for the search. Deliberately bad placeholder
+policies live in isolated files so the search can be checked against a known
+answer.
+
 ### 5. GEMM Sequence and Scheduling
 
 `simulate_latency_energy()` loops through the normalized sequence in order. For

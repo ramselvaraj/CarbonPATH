@@ -1,0 +1,51 @@
+{
+  "sys_array": ["64x64", "96x96", "128x128", "192x192"],
+  "tech_nodes": ["7", "10", "14"],
+  "sram_buf_sizes": {
+    "64x64": [256, 512, 768, 1024],
+    "96x96": [512, 1024, 1536, 2048],
+    "128x128": [1024, 2048, 3072, 4096],
+    "192x192": [2048, 4096, 6144, 8192]
+  },
+  "fpga": {
+    "clbs": [8000, 10000, 16000, 32000],
+    "brams": [100, 200, 400],
+    "dsps": [250, 500, 1000],
+    "frequency_hz": [200000000, 300000000, 400000000],
+    "relu_implementation": [
+      {
+        "clbs_per_lane": 5,
+        "brams_per_lane": 0,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 64,
+        "energy_per_element_pj": null
+      },
+      {
+        "clbs_per_lane": 2,
+        "brams_per_lane": 0,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 128,
+        "energy_per_element_pj": 0.1
+      },
+      {
+        "clbs_per_lane": 10,
+        "brams_per_lane": 1,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 32,
+        "energy_per_element_pj": null
+      }
+    ]
+  },
+  "pkg": {
+    "protocol": ["ucie_std", "ucie_adv", "aib"],
+    "mem_pkg_architecture": ["ddr5", "hbm2", "hbm3"]
+  },
+  "transfer_model": [
+    {"setup_latency_ns": 5.0, "hop_latency_ns": 1.0},
+    {"setup_latency_ns": 2.0, "hop_latency_ns": 0.5}
+  ],
+  "profiles": [
+    "cfg/profiles/legacy_sa_fpga_v1.json",
+    "cfg/profiles/atlas_modular_v1.json"
+  ]
+}

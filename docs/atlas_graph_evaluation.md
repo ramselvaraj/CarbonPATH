@@ -234,7 +234,11 @@ supported for ATLAS graphs.
 - `system/utils/TensorMovement.py`: residency, movement plans, and registry.
 - `system/utils/TransferEstimator.py`: resolved-route transfer cost model and
   registry.
+- `system/utils/AtlasObjective.py`: replaceable objective models and the raw
+  design point used by modular annealing.
+- `system/utils/AtlasAnnealingMoves.py`: modular architecture/profile moves.
 - `main.evaluate_atlas_graph`: the graph executor.
+- `main.evaluate_atlas_design_point`: the modular annealing objective bridge.
 - `network.evaluate_atlas_network`: reporting for ATLAS graphs.
 
 ## Known Limitations

@@ -1,0 +1,12 @@
+{
+    "profile": "atlas_modular_v1",
+    "version": 1,
+    "evaluators": {
+        "gemm": "legacy_scale_sim_gemm_v1",
+        "relu": "legacy_fpga_relu_v1",
+        "softmax": "placeholder_fpga_softmax_v0"
+    },
+    "placement_policy": "fixed_single_sa_single_fpga_v1",
+    "movement_policy": "activation_boundary_v1",
+    "transfer_model": "route_transfer_v1"
+}

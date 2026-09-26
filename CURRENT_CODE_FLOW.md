@@ -54,7 +54,7 @@ outputs: best architecture, traces, CSV/JSON reports, plots
 
 | File | Role |
 |---|---|
-| `main.py` | Legacy GEMM and ordered-GEMM CLI; calibration, policy comparison, objective calculation, and simulated annealing. |
+| `main.py` | Legacy GEMM and ordered-GEMM CLI; calibration, policy comparison, objective calculation, simulated annealing, and modular ATLAS annealing. |
 | `network.py` | Network JSON CLI for validation, calibration, fixed-architecture evaluation, and memory-policy comparison. It does not run simulated annealing. |
 | `Makefile` | Shortcuts for run, calibration, simulated annealing, parallel jobs, cleanup, and tests. |
 | `script/validate_intermediate_memory_capacity.py` | Deterministic policy/capacity validation using fixed architectures. |
@@ -201,6 +201,37 @@ max_move_per_temp_step=50
 cooling_rate=0.99
 ```
 
+### Modular ATLAS annealing
+
+`sim_annealing()` also has an ATLAS branch, selected by passing `atlas_graph`.
+It skips calibration and the legacy GEMM sequence and instead:
+
+1. Scores the initial `(architecture, profile)` with
+   `main.evaluate_atlas_design_point`, which wraps `main.evaluate_atlas_graph`
+   plus architecture metrics and carbon, then hands a raw `AtlasDesignPoint` to
+   a replaceable `AtlasObjective`.
+2. Mutates the design point with
+   `system/utils/AtlasAnnealingMoves.mutate_atlas_design_point`, which changes
+   the SA/FPGA/package/transfer architecture or the evaluation profile and
+   enforces exactly one SA and one FPGA endpoint.
+3. Reuses the same acceptance, cooling, logging, temperature controller, and
+   move-budget code as the legacy branch.
+
+`system/utils/AtlasObjective.py` owns the replaceable objective. The default
+`raw_weighted_sum_v0` is uncalibrated and reads coefficients from
+`cfg/parameters/atlas_objective.json`. `cfg/experiments/atlas_modular_search_space.json`
+declares the modular search space and candidate profiles.
+
+The trace DataFrame returned in ATLAS mode carries
+`attrs["best_profile"]`, `attrs["best_profile_fingerprint"]`, and
+`attrs["candidate_profiles"]`. The best profile is written to
+`cfg/gen_arch/<run>/best_profile.json`.
+
+Placeholder material for checking the search lives in
+`system/utils/PlaceholderPolicies.py`, `cfg/profiles/placeholders/`, and
+`script/validate_atlas_policy_scores.py`; it is isolated for later deletion.
+
+
 ## Fixed-Architecture Evaluation Flow
 
 Policy and network benchmark paths do not run simulated annealing.
@@ -247,6 +278,9 @@ Tests are under `tests/` and run through unittest discovery. The main groups are
 - `test_simulation_cache.py`: cache keys, model versions, and scheduler accounting.
 - `test_architecture_identity.py`: architecture fingerprints.
 - `test_optimizer_experiments.py`: experiment helpers and schedule budgets.
+- `test_atlas_objective.py`: modular objective scoring and known-bad profile ranking.
+- `test_atlas_annealing_moves.py`: modular mutation and the one-SA/one-FPGA invariant.
+- `test_atlas_annealing.py`: seeded modular annealing selects a good profile.
 
 ## Current Caveats
 

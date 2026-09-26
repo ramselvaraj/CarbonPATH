@@ -124,6 +124,18 @@ The reproducible fixed-schedule baseline campaign for workloads 7, 9, and 10 is 
 
 Workload 11 is a chained FFN surrogate using dimensions from workload 1: `[512, 768, 3072] -> [512, 3072, 768]`. It represents expansion and contraction only; activations, normalization, bias, and residual behavior are not modeled. Its intermediate is `1,572,864` int8 bytes and its total MAC count is `2,415,919,104`.
 
+Workloads 12–16 are small sequential studies that probe chain length, bottlenecks, boundary accumulation, and intermediate-memory capacity. They use the same canonical sequence form and follow the same M-constant / `K_next = N_prev` rule.
+
+| Workload | Name | Chain | Total MACs | Intermediates |
+|---:|---|---|---:|---|
+| 12 | `three_gemm_chain` | `[128, 256, 256] -> [128, 256, 128] -> [128, 128, 64]` | 13,631,488 | 32 KiB, 16 KiB |
+| 13 | `bottleneck_chain` | `[128, 512, 128] -> [128, 128, 512]` | 16,777,216 | 16 KiB |
+| 14 | `six_gemm_chain` | `[128, 128, 128]` x 6 | 12,582,912 | 5 x 16 KiB |
+| 15 | `capacity_chain` | `[512, 64, 1024] -> [512, 1024, 64]` | 67,108,864 | 512 KiB |
+| 16 | `wide_intermediate_chain` | `[1024, 32, 1024] -> [1024, 1024, 32]` | 67,108,864 | 1 MiB |
+
+Workloads 15 and 16 produce intermediates larger than the smallest `256` KiB SRAM buffer, so they exercise the intermediate-memory capacity fallback; workload 16 does so with a cheap `K = 32` reduction.
+
 The paired workload-1/workload-11 pilot keeps the full search space, `t1`, `direct_forward`, and the fixed SA schedule unchanged while using 200 calibration samples:
 
 ```bash
@@ -261,6 +273,44 @@ Each intermediate activation moves between the producing endpoint and the
 consuming endpoint exactly once, and the consumer owns that movement. Calibration
 and `compare-memory` are not supported for ATLAS graphs. See
 `docs/atlas_graph_evaluation.md` for the full contract.
+
+#### Anneal a modular ATLAS design point
+
+`main.py` can run simulated annealing over the modular evaluator instead of the
+legacy GEMM path. The search mutates both the architecture (one SA endpoint, one
+FPGA endpoint, package, transfer model) and the evaluation profile (evaluators,
+placement, movement, transfer), while the ATLAS graph stays fixed. Each candidate
+is scored by a replaceable, uncalibrated objective selected in
+`cfg/parameters/atlas_objective.json`; the default is a weighted sum of raw
+latency and energy. Swap the objective model to change scoring without touching
+`sim_annealing`.
+
+```bash
+.venv/bin/python -m main --run_mode run_sim_anneal \
+  --atlas_graph cfg/examples/atlas/dense_relu_funnel.graph_dump.json \
+  --architecture_file cfg/examples/sa_fpga_architecture.json \
+  --evaluation_profile cfg/profiles/legacy_sa_fpga_v1.json \
+  --atlas_search_space cfg/experiments/atlas_modular_search_space.json \
+  --initial_temp 40 --freezing_temp 5e-4 \
+  --max_move_per_temp_step 5 --cooling_rate 0.3
+```
+
+or `make sim_anneal_atlas`. The best architecture and its evaluation profile are
+written under `cfg/gen_arch/<run>/`.
+
+A placeholder policy catalog
+(`cfg/profiles/placeholders/`, `system/utils/PlaceholderPolicies.py`) supplies
+deliberately bad movement, transfer, and GEMM policies so the annealer can be
+checked against a known answer:
+
+```bash
+.venv/bin/python script/validate_atlas_policy_scores.py \
+  --graph cfg/examples/atlas/dense_relu_funnel.graph_dump.json \
+  --architecture cfg/examples/sa_fpga_architecture.json
+```
+
+It asserts the reference profile scores strictly better than every known-bad
+placeholder. The placeholder files are isolated and can be deleted as a unit.
 
 #### Run optimizer experiments
 

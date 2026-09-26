@@ -25,6 +25,18 @@ run:
 sim_anneal:
 	$(MAKE) run WORKLOAD=$(WORKLOAD) RUN_MODE=run_sim_anneal COST_PROFILE=$(COST_PROFILE)
 
+# Modular ATLAS annealing: architecture + evaluation-profile search.
+ATLAS_GRAPH ?= cfg/examples/atlas/dense_relu_funnel.graph_dump.json
+EVALUATION_PROFILE ?= cfg/profiles/legacy_sa_fpga_v1.json
+ATLAS_SEARCH_SPACE ?= cfg/experiments/atlas_modular_search_space.json
+ARCHITECTURE_FILE ?= cfg/examples/sa_fpga_architecture.json
+
+sim_anneal_atlas:
+	$(PYTHON) --run_mode run_sim_anneal --atlas_graph $(ATLAS_GRAPH) --evaluation_profile $(EVALUATION_PROFILE) --atlas_search_space $(ATLAS_SEARCH_SPACE) --architecture_file $(ARCHITECTURE_FILE) --initial_temp $(INITIAL_TEMP) --freezing_temp $(FREEZING_TEMP) --max_move_per_temp_step $(MAX_MOVE_PER_TEMP_STEP) --cooling_rate $(COOLING_RATE) $(if $(RUN_NAME),--run_name $(RUN_NAME)) $(if $(SEED),--seed $(SEED)) $(if $(CACHE_FILE),--cache_file $(CACHE_FILE))
+
+validate_atlas_policy_scores:
+	$(TEST_PYTHON) script/validate_atlas_policy_scores.py --graph $(ATLAS_GRAPH) --architecture $(ARCHITECTURE_FILE)
+
 calibration:
 	$(MAKE) run WORKLOAD=$(WORKLOAD) RUN_MODE=run_calibration
 
