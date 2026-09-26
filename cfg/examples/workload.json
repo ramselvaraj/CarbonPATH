@@ -65,5 +65,90 @@
                 "shape": [512, 3072, 768]
             }
         ]
+    },
+    "12": {
+        "name": "three_gemm_chain",
+        "gemms": [
+            {
+                "name": "expand",
+                "shape": [128, 256, 256]
+            },
+            {
+                "name": "compress",
+                "shape": [128, 256, 128]
+            },
+            {
+                "name": "project",
+                "shape": [128, 128, 64]
+            }
+        ]
+    },
+    "13": {
+        "name": "bottleneck_chain",
+        "gemms": [
+            {
+                "name": "compress",
+                "shape": [128, 512, 128]
+            },
+            {
+                "name": "expand",
+                "shape": [128, 128, 512]
+            }
+        ]
+    },
+    "14": {
+        "name": "six_gemm_chain",
+        "gemms": [
+            {
+                "name": "block_1",
+                "shape": [128, 128, 128]
+            },
+            {
+                "name": "block_2",
+                "shape": [128, 128, 128]
+            },
+            {
+                "name": "block_3",
+                "shape": [128, 128, 128]
+            },
+            {
+                "name": "block_4",
+                "shape": [128, 128, 128]
+            },
+            {
+                "name": "block_5",
+                "shape": [128, 128, 128]
+            },
+            {
+                "name": "block_6",
+                "shape": [128, 128, 128]
+            }
+        ]
+    },
+    "15": {
+        "name": "capacity_chain",
+        "gemms": [
+            {
+                "name": "produce",
+                "shape": [512, 64, 1024]
+            },
+            {
+                "name": "consume",
+                "shape": [512, 1024, 64]
+            }
+        ]
+    },
+    "16": {
+        "name": "wide_intermediate_chain",
+        "gemms": [
+            {
+                "name": "produce",
+                "shape": [1024, 32, 1024]
+            },
+            {
+                "name": "consume",
+                "shape": [1024, 1024, 32]
+            }
+        ]
     }
 }

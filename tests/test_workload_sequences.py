@@ -78,6 +78,16 @@ class WorkloadSequenceTests(unittest.TestCase):
         self.assertEqual(len(WORKLOAD_CONFIGS[10]["gemms"]), 2)
         self.assertEqual(WORKLOAD_CONFIGS[11]["name"], "ffn_up_down_512")
         self.assertEqual(len(WORKLOAD_CONFIGS[11]["gemms"]), 2)
+        self.assertEqual(WORKLOAD_CONFIGS[12]["name"], "three_gemm_chain")
+        self.assertEqual(len(WORKLOAD_CONFIGS[12]["gemms"]), 3)
+        self.assertEqual(WORKLOAD_CONFIGS[13]["name"], "bottleneck_chain")
+        self.assertEqual(len(WORKLOAD_CONFIGS[13]["gemms"]), 2)
+        self.assertEqual(WORKLOAD_CONFIGS[14]["name"], "six_gemm_chain")
+        self.assertEqual(len(WORKLOAD_CONFIGS[14]["gemms"]), 6)
+        self.assertEqual(WORKLOAD_CONFIGS[15]["name"], "capacity_chain")
+        self.assertEqual(len(WORKLOAD_CONFIGS[15]["gemms"]), 2)
+        self.assertEqual(WORKLOAD_CONFIGS[16]["name"], "wide_intermediate_chain")
+        self.assertEqual(len(WORKLOAD_CONFIGS[16]["gemms"]), 2)
 
     def test_workload_11_is_a_dimension_compatible_ffn_chain(self):
         workload = parse_workload_entry(11, WORKLOAD_CONFIGS[11])
@@ -94,6 +104,85 @@ class WorkloadSequenceTests(unittest.TestCase):
             2_415_919_104,
         )
         self.assertEqual(512 * 3072, 1_572_864)
+
+    def test_workload_12_is_a_three_gemm_chain(self):
+        workload = parse_workload_entry(12, WORKLOAD_CONFIGS[12])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "expand", "shape": (128, 256, 256)},
+                {"name": "compress", "shape": (128, 256, 128)},
+                {"name": "project", "shape": (128, 128, 64)},
+            ],
+        )
+        self.assertEqual(128 * 256, 32_768)
+        self.assertEqual(128 * 128, 16_384)
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            13_631_488,
+        )
+
+    def test_workload_13_is_a_bottleneck_chain(self):
+        workload = parse_workload_entry(13, WORKLOAD_CONFIGS[13])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "compress", "shape": (128, 512, 128)},
+                {"name": "expand", "shape": (128, 128, 512)},
+            ],
+        )
+        self.assertEqual(128 * 128, 16_384)
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            16_777_216,
+        )
+
+    def test_workload_14_is_a_six_gemm_chain(self):
+        workload = parse_workload_entry(14, WORKLOAD_CONFIGS[14])
+
+        self.assertEqual(len(workload["gemms"]), 6)
+        self.assertEqual(
+            [gemm["shape"] for gemm in workload["gemms"]],
+            [(128, 128, 128)] * 6,
+        )
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            12_582_912,
+        )
+
+    def test_workload_15_is_a_capacity_boundary_chain(self):
+        workload = parse_workload_entry(15, WORKLOAD_CONFIGS[15])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "produce", "shape": (512, 64, 1024)},
+                {"name": "consume", "shape": (512, 1024, 64)},
+            ],
+        )
+        self.assertEqual(512 * 1024, 524_288)
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            67_108_864,
+        )
+
+    def test_workload_16_is_a_wide_intermediate_chain(self):
+        workload = parse_workload_entry(16, WORKLOAD_CONFIGS[16])
+
+        self.assertEqual(
+            workload["gemms"],
+            [
+                {"name": "produce", "shape": (1024, 32, 1024)},
+                {"name": "consume", "shape": (1024, 1024, 32)},
+            ],
+        )
+        self.assertEqual(1024 * 1024, 1_048_576)
+        self.assertEqual(
+            sum(m * k * n for m, k, n in (gemm["shape"] for gemm in workload["gemms"])),
+            67_108_864,
+        )
 
     def test_workload_10_is_a_projection_head_sequence(self):
         workload = parse_workload_entry(10, WORKLOAD_CONFIGS[10])
