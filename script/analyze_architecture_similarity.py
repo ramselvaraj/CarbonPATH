@@ -2,18 +2,22 @@
 
 Each "set" is a labelled group of run directories produced by one annealing
 schedule/experiment. A run directory is any directory containing both a
-``best_arch_*.json`` file and an ``sa_metrics_*.csv`` file.
+``best_arch_*.json`` file and an ``sa_metrics_*.csv`` file. If the run directory
+also contains a ``best_profile.json`` (modular ATLAS runs), its evaluation
+profile name and fingerprint are recorded too.
 
 The script writes a Markdown report plus CSV tables covering:
 
-- objective summary per set (best, worst, relative spread)
+- objective summary per set (best, worst, relative spread, 0.1% cluster)
 - canonical architecture fingerprint groups
 - per-field architecture agreement
+- evaluation-profile agreement (when profiles are present)
 - pairwise normalized feature distance matrices
 - distance-to-best and its correlation with objective
 
-The feature extraction is workload-independent, so the same command works for
-any workload by pointing ``--set`` at the relevant run directories.
+Feature extraction is workload-independent and covers legacy SA architectures,
+FPGA chiplets, and the modular ``transfer_model`` block, so the same command
+works for legacy and ATLAS run sets.
 
 Example:
     python -m script.analyze_architecture_similarity \
@@ -41,8 +45,15 @@ from system.utils.ArchitectureIdentity import (
     canonical_architecture_fingerprint,
     canonicalize_chiplet_labels,
 )
+from system.utils.EvaluationProfile import (
+    parse_evaluation_profile,
+)
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 MISSING = object()
+
+#: Relative tolerance for the "within 0.1% of best" objective cluster.
+CLUSTER_TOLERANCE = 1e-3
 
 
 @dataclass
@@ -55,6 +66,8 @@ class RunRecord:
     features: dict
     features_flat: str = ""
     distance_to_best: float = float("nan")
+    profile_name: str | None = None
+    profile_fingerprint: str | None = None
 
     def __post_init__(self):
         self.features_flat = json.dumps(self.features, sort_keys=True)
@@ -68,7 +81,14 @@ class RunSet:
 
 
 def architecture_features(architecture: dict) -> dict:
-    """Flatten a canonicalized architecture into comparable scalar fields."""
+    """Flatten a canonicalized architecture into comparable scalar fields.
+
+    Legacy SA chiplets contribute ``tech_node``, ``sys_array_size``, and
+    ``sram_buf``. FPGA chiplets contribute their resource counts and ReLU
+    implementation. The modular ``transfer_model`` block is flattened when
+    present. Absent fields are simply omitted, so legacy and ATLAS
+    architectures produce comparable feature dictionaries.
+    """
     canonical = canonicalize_chiplet_labels(architecture)
     chiplets = sorted(
         (key for key in canonical if key.startswith("Chiplet_")),
@@ -78,9 +98,20 @@ def architecture_features(architecture: dict) -> dict:
     features = {"n_chiplets": len(chiplets)}
     for index, name in enumerate(chiplets, start=1):
         chiplet = canonical[name]
+        chiplet_type = str(chiplet.get("chiplet_type", "systolic_array")).lower()
+        features[f"chip{index}.chiplet_type"] = chiplet_type
         features[f"chip{index}.tech_node"] = chiplet.get("tech_node")
         features[f"chip{index}.sys_array_size"] = chiplet.get("sys_array_size")
         features[f"chip{index}.sram_buf"] = chiplet.get("sram_buf")
+        if chiplet_type == "fpga":
+            for field in ("clbs", "brams", "dsps", "frequency_hz", "area", "power"):
+                features[f"chip{index}.{field}"] = chiplet.get(field)
+            implementation = chiplet.get("relu_implementation")
+            if isinstance(implementation, dict):
+                for key in sorted(implementation):
+                    features[f"chip{index}.relu_implementation.{key}"] = (
+                        implementation[key]
+                    )
 
     package = canonical.get("pkg", {})
     features["pkg.HI_pkg_type"] = package.get("HI_pkg_type")
@@ -108,6 +139,11 @@ def architecture_features(architecture: dict) -> dict:
     if isinstance(mapping, dict):
         for key, value in mapping.items():
             features[f"wl.{key}"] = value
+
+    transfer_model = canonical.get("transfer_model")
+    if isinstance(transfer_model, dict):
+        for key in sorted(transfer_model):
+            features[f"transfer.{key}"] = transfer_model[key]
 
     return features
 
@@ -155,6 +191,34 @@ def field_agreement(records: list[RunRecord]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def within_tolerance_count(records: list[RunRecord], tolerance=CLUSTER_TOLERANCE):
+    """Count records whose objective is within ``tolerance`` of the best.
+
+    Uses a symmetric relative window (``|objective - best| <= tolerance * |best|``)
+    so it behaves for negative objectives as well as positive ones.
+    """
+    if not records:
+        return 0
+    best = min(record.objective for record in records)
+    window = tolerance * abs(best)
+    return sum(
+        1 for record in records if abs(record.objective - best) <= window
+    )
+
+
+def _profile_identity(path: Path):
+    """Return ``(name, fingerprint)`` from a modular ``best_profile.json``."""
+    profile_path = path / "best_profile.json"
+    if not profile_path.exists():
+        return None, None
+    try:
+        with profile_path.open(encoding="utf-8") as handle:
+            profile = parse_evaluation_profile(json.load(handle))
+    except (OSError, ValueError, UnsupportedEvaluation, json.JSONDecodeError):
+        return None, None
+    return profile.name, profile.fingerprint()
+
+
 def load_run_set(label: str, pattern: str) -> RunSet:
     run_set = RunSet(label=label, pattern=pattern)
     for directory in sorted(glob.glob(pattern)):
@@ -166,6 +230,7 @@ def load_run_set(label: str, pattern: str) -> RunSet:
         with architectures[-1].open(encoding="utf-8") as handle:
             architecture = json.load(handle)
         frame = pd.read_csv(metrics[-1])
+        profile_name, profile_fingerprint = _profile_identity(path)
         run_set.records.append(
             RunRecord(
                 set_label=label,
@@ -174,6 +239,8 @@ def load_run_set(label: str, pattern: str) -> RunSet:
                 moves=int(frame["SA_run_loop"].max()),
                 fingerprint=canonical_architecture_fingerprint(architecture),
                 features=architecture_features(architecture),
+                profile_name=profile_name,
+                profile_fingerprint=profile_fingerprint,
             )
         )
     if not run_set.records:
@@ -222,7 +289,36 @@ def decorate_distances(run_set: RunSet) -> pd.DataFrame:
     return matrix
 
 
-def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
+def profile_agreement(records: list[RunRecord]) -> pd.DataFrame:
+    """Per-profile run counts and modal share, ignoring runs without a profile."""
+    profiled = [record for record in records if record.profile_name]
+    if not profiled:
+        return pd.DataFrame()
+    counts = Counter(record.profile_name for record in profiled)
+    rows = []
+    for name, count in counts.most_common():
+        fingerprints = sorted(
+            {
+                record.profile_fingerprint
+                for record in profiled
+                if record.profile_name == name
+            }
+        )
+        rows.append(
+            {
+                "profile": name,
+                "runs": count,
+                "agreement": count / len(records),
+                "fingerprints": "; ".join(str(value) for value in fingerprints),
+                "members": ", ".join(
+                    record.run for record in profiled if record.profile_name == name
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_report(workload, run_sets: list[RunSet], output: Path) -> str:
     output.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# Architecture Similarity Report — Workload {workload}",
@@ -246,8 +342,8 @@ def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
     lines += [
         "## Objective summary",
         "",
-        "| Set | Runs | Moves | Best | Worst | Relative spread | Distinct canonical fingerprints | Largest fingerprint group |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Set | Runs | Moves | Best | Worst | Relative spread | Within 0.1% of best | Distinct canonical fingerprints | Largest fingerprint group |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for run_set in run_sets:
         objectives = [record.objective for record in run_set.records]
@@ -257,9 +353,11 @@ def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
             str(value) for value in sorted(moves)
         )
         spread = (max(objectives) - min(objectives)) / abs(min(objectives))
+        cluster = within_tolerance_count(run_set.records)
         lines.append(
             f"| `{run_set.label}` | {len(objectives)} | {moves_label} | "
             f"{min(objectives):.6f} | {max(objectives):.6f} | {spread:.2%} | "
+            f"{cluster}/{len(objectives)} | "
             f"{len(fingerprints)} | {fingerprints.most_common(1)[0][1]} |"
         )
     lines.append("")
@@ -271,15 +369,31 @@ def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
 
         lines += ["### Per-run results", ""]
         lines += [
-            "| Run | Objective | Moves | Canonical fingerprint | Distance to best |",
-            "|---|---:|---:|---|---:|",
+            "| Run | Objective | Moves | Profile | Canonical fingerprint | Distance to best |",
+            "|---|---:|---:|---|---|---:|",
         ]
         for record in sorted(records, key=lambda item: item.objective):
             lines.append(
                 f"| `{record.run}` | {record.objective:.12g} | {record.moves} | "
-                f"`{record.fingerprint}` | {record.distance_to_best:.3f} |"
+                f"{record.profile_name or '—'} | `{record.fingerprint}` | "
+                f"{record.distance_to_best:.3f} |"
             )
         lines.append("")
+
+        profiles = profile_agreement(records)
+        if not profiles.empty:
+            lines += [
+                "### Evaluation profile agreement",
+                "",
+                "| Profile | Runs | Agreement | Fingerprint(s) | Members |",
+                "|---|---:|---:|---|---|",
+            ]
+            for row in profiles.itertuples():
+                lines.append(
+                    f"| `{row.profile}` | {row.runs} | {row.agreement:.0%} | "
+                    f"`{row.fingerprints}` | {row.members} |"
+                )
+            lines.append("")
 
         group_counts = Counter(record.features_flat for record in records)
         lines += [
@@ -346,6 +460,8 @@ def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
                     "run": record.run,
                     "objective": record.objective,
                     "moves": record.moves,
+                    "profile_name": record.profile_name,
+                    "profile_fingerprint": record.profile_fingerprint,
                     "fingerprint": record.fingerprint,
                     "distance_to_best": record.distance_to_best,
                     **record.features,
@@ -356,6 +472,8 @@ def render_report(workload: int, run_sets: list[RunSet], output: Path) -> str:
         csv_frame.to_csv(output / f"runs_{run_set.label}.csv", index=False)
         matrix.to_csv(output / f"distance_matrix_{run_set.label}.csv")
         agreement.to_csv(output / f"field_agreement_{run_set.label}.csv", index=False)
+        if not profiles.empty:
+            profiles.to_csv(output / f"profiles_{run_set.label}.csv", index=False)
 
     report = "\n".join(lines) + "\n"
     (output / "report.md").write_text(report, encoding="utf-8")
@@ -373,7 +491,12 @@ def parse_set(value: str) -> tuple[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workload", type=int, required=True)
+    parser.add_argument(
+        "--workload",
+        type=str,
+        required=True,
+        help="Label for the report title, e.g. 6 or atlas_funnel",
+    )
     parser.add_argument(
         "--set",
         dest="sets",
