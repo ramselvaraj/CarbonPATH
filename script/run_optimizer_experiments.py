@@ -19,6 +19,7 @@ import pandas as pd
 
 from chiplet.n_disagg import PackageGenerator
 from chiplet.n_utils import get_area_power, get_sram_area_energy
+from config import calibration_mode
 from main import (
     calculate_cost,
     calibration_identity,
@@ -28,6 +29,9 @@ from main import (
 )
 from network import compare_memory_policies, write_network_comparison
 from system.utils.ArchitectureIdentity import architecture_fingerprint
+from system.utils.AtlasAnnealingMoves import sequential_gemm_search_space
+from system.utils.AtlasObjective import build_atlas_objective
+from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.NetworkWorkload import load_network
 from system.utils.SimulationCache import SIMULATION_MODEL_VERSION, SimulationCache
 
@@ -139,6 +143,8 @@ def run_search(
     temperature_controller=None,
     level_callback=None,
     max_total_moves=None,
+    atlas_graph=None,
+    evaluation_profile_path="cfg/profiles/atlas_modular_v1.json",
 ):
     annealing = annealing or CURRENT_ANNEALING
     run_dir = Path(output_dir) / label
@@ -152,24 +158,49 @@ def run_search(
         started = time.perf_counter()
         with log_path.open("w", encoding="utf-8") as log:
             with redirect_stdout(log), redirect_stderr(log):
-                best_cost, best_architecture, trace, architecture_trace = (
-                    sim_annealing(
-                        wl_idx=workload_id,
-                        workload_sequence=workload,
-                        cache_file=cache_path,
-                        run_name=str(Path(directory) / "simulation"),
-                        cost_profile="t1",
-                        calibration_iterations=1,
-                        intermediate_policy=intermediate_policy,
-                        random_seed=search_seed,
-                        input_file_path=str(search_space),
-                        calibration_file_path=str(calibration_path),
-                        initial_architecture=initial_architecture,
-                        temperature_controller=temperature_controller,
-                        level_callback=level_callback,
-                        max_total_moves=max_total_moves,
-                        **annealing,
+                common = {
+                    "cache_file": cache_path,
+                    "run_name": str(Path(directory) / "simulation"),
+                    "cost_profile": "t1",
+                    "calibration_iterations": 1,
+                    "intermediate_policy": intermediate_policy,
+                    "random_seed": search_seed,
+                    "initial_architecture": initial_architecture,
+                    "temperature_controller": temperature_controller,
+                    "level_callback": level_callback,
+                    "max_total_moves": max_total_moves,
+                    **annealing,
+                }
+                if atlas_graph is None:
+                    flow = {
+                        "wl_idx": workload_id,
+                        "workload_sequence": workload,
+                        "input_file_path": str(search_space),
+                        "calibration_file_path": str(calibration_path),
+                    }
+                else:
+                    profile = load_evaluation_profile(
+                        evaluation_profile_path
+                    ).with_movement_policy(f"{intermediate_policy}_v1")
+                    objective = build_atlas_objective(
+                        objective_id="t1",
+                        config={"default": "t1"},
+                        calibration=load_json(calibration_path),
+                        normalization_mode=calibration_mode,
                     )
+                    flow = {
+                        "wl_idx": None,
+                        "workload_sequence": None,
+                        "atlas_graph": atlas_graph,
+                        "atlas_profile": profile,
+                        "atlas_search_space": sequential_gemm_search_space(
+                            load_json(search_space)
+                        ),
+                        "atlas_objective": objective,
+                        "candidate_profiles": (profile,),
+                    }
+                best_cost, best_architecture, trace, architecture_trace = (
+                    sim_annealing(**common, **flow)
                 )
         elapsed = time.perf_counter() - started
         shutil.copy2(cache_path, base_cache)

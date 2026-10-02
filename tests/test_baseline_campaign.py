@@ -16,11 +16,24 @@ from script.run_baseline_campaign import (
     sha256,
     SCHEDULE,
     planned_move_count,
+    parse_atlas_graph_specs,
     task_list,
 )
 
 
 class BaselineCampaignTests(unittest.TestCase):
+    def test_atlas_graph_specs_require_every_selected_workload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory) / "graph.json"
+            graph.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing 10"):
+                parse_atlas_graph_specs([f"9={graph}"], (9, 10))
+
+            self.assertEqual(
+                parse_atlas_graph_specs([f"9={graph}"], (9,)),
+                {9: graph.resolve()},
+            )
+
     def test_progress_file_reports_attempted_and_remaining_moves(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "progress.json"

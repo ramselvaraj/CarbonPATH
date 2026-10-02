@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -43,6 +44,10 @@ from system.utils.ArchitectureIdentity import (
     architecture_fingerprint,
     canonical_architecture_fingerprint,
 )
+from system.utils.AtlasGraphAdapter import (
+    gemm_sequence_to_atlas_graph,
+    load_atlas_graph,
+)
 from system.utils.EvaluationProfile import parse_evaluation_profile
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -61,6 +66,62 @@ INITIAL_SEED_BASE = 12000
 SEARCH_SEED_BASE = 13000
 CALIBRATION_SEED_BASE = 10000
 EVALUATION_PROFILE = Path("cfg/profiles/atlas_modular_v1.json")
+
+
+def graph_signature(graph):
+    """Fields of the operation graph that CarbonPATH evaluates."""
+    return tuple(
+        (
+            operation.operation_type,
+            operation.gemm_shape,
+            operation.input_tensor.shape,
+            operation.output_tensor.shape,
+        )
+        for operation in graph.operations
+    )
+
+
+def parse_atlas_graph_specs(specs, workloads):
+    """Parse repeated WORKLOAD=GRAPH arguments and require complete coverage."""
+    if not specs:
+        return {}
+    selected = set(workloads)
+    parsed = {}
+    for spec in specs:
+        workload_text, separator, path_text = spec.partition("=")
+        if not separator or not workload_text or not path_text:
+            raise ValueError("--atlas-graph must use WORKLOAD=PATH")
+        try:
+            workload_id = int(workload_text)
+        except ValueError as error:
+            raise ValueError("--atlas-graph workload must be an integer") from error
+        if workload_id not in selected:
+            raise ValueError(
+                f"ATLAS graph supplied for unselected workload {workload_id}"
+            )
+        if workload_id in parsed:
+            raise ValueError(f"duplicate ATLAS graph for workload {workload_id}")
+        path = Path(path_text).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        parsed[workload_id] = path
+    missing = sorted(selected - set(parsed))
+    if missing:
+        raise ValueError(
+            "ATLAS graphs are required for every selected workload; missing "
+            + ", ".join(str(workload_id) for workload_id in missing)
+        )
+    return parsed
+
+
+def load_manifest_graph(output, manifest, workload_id):
+    entry = manifest.get("atlas_graphs", {}).get(str(workload_id))
+    if entry is None:
+        return None
+    path = Path(output) / entry["path"]
+    if sha256(path) != entry["sha256"]:
+        raise RuntimeError(f"ATLAS graph differs for workload {workload_id}")
+    return load_atlas_graph(path)
 
 
 def atomic_write(path: Path, value) -> None:
@@ -201,6 +262,11 @@ def result_is_valid(
                 return False
             if result["workload_config_sha256"] != manifest["workload_config_sha256"][str(result["workload_id"])]:
                 return False
+            graph_entry = manifest.get("atlas_graphs", {}).get(
+                str(result["workload_id"])
+            )
+            if graph_entry is not None and result.get("atlas_graph_sha256") != graph_entry["sha256"]:
+                return False
             if result["git_commit"] != manifest["git_commit"]:
                 return False
             if manifest.get("evaluation_flow") == "modular":
@@ -282,6 +348,7 @@ def manifest_for(output: Path, workloads, runs, calibration_samples, base_cache)
         "campaign_type": "fixed_sa_baseline",
         "campaign_version": 1,
         "evaluation_flow": "modular",
+        "input_flow": "compatibility_adapter",
         "git_commit": subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
         ).stdout.strip(),
@@ -311,6 +378,7 @@ def manifest_for(output: Path, workloads, runs, calibration_samples, base_cache)
         },
         "base_cache_sha256": sha256(base_cache),
         "calibrations": {},
+        "atlas_graphs": {},
         "created_at": time.time(),
         "output_root": str(output),
     }
@@ -325,8 +393,29 @@ def prepare(args) -> None:
     base_cache = output / "base_cache.csv"
     initialize_experiment_cache(args.base_cache, base_cache)
     manifest = manifest_for(output, args.workloads, args.runs, args.calibration_samples, base_cache)
+    graph_specs = parse_atlas_graph_specs(args.atlas_graph, args.workloads)
+    if graph_specs:
+        manifest["input_flow"] = "keras_atlas"
+        graph_dir = output / "graphs"
+        graph_dir.mkdir(parents=True, exist_ok=True)
+        for workload_id, source in graph_specs.items():
+            workload = parse_workload_entry(workload_id, WORKLOAD_CONFIGS[workload_id])
+            graph = load_atlas_graph(source)
+            expected = gemm_sequence_to_atlas_graph(workload)
+            if graph_signature(graph) != graph_signature(expected):
+                raise RuntimeError(
+                    f"Keras/ATLAS graph does not match workload {workload_id}"
+                )
+            destination = graph_dir / f"workload_{workload_id}.graph_dump.json"
+            shutil.copy2(source, destination)
+            manifest["atlas_graphs"][str(workload_id)] = {
+                "path": str(destination.resolve().relative_to(output.resolve())),
+                "sha256": sha256(destination),
+                "signature": graph_signature(graph),
+            }
     for workload_id in args.workloads:
         workload = parse_workload_entry(workload_id, WORKLOAD_CONFIGS[workload_id])
+        graph = load_manifest_graph(output, manifest, workload_id)
         calibration = calibrate_workload(
             output_dir=output / "calibration",
             workload_id=workload_id,
@@ -334,6 +423,7 @@ def prepare(args) -> None:
             samples=args.calibration_samples,
             seed=CALIBRATION_SEED_BASE + workload_id,
             base_cache=base_cache,
+            graph=graph,
         )
         manifest["calibrations"][str(workload_id)] = {
             "path": str(Path(calibration).resolve().relative_to(output.resolve())),
@@ -372,6 +462,11 @@ def _worker(args) -> None:
     workload = parse_workload_entry(workload_id, WORKLOAD_CONFIGS[workload_id])
     if value_sha256(WORKLOAD_CONFIGS[workload_id]) != manifest["workload_config_sha256"][str(workload_id)]:
         raise RuntimeError("workload configuration differs from the prepared manifest")
+    graph = load_manifest_graph(output, manifest, workload_id)
+    if graph is not None and graph_signature(graph) != graph_signature(
+        gemm_sequence_to_atlas_graph(workload)
+    ):
+        raise RuntimeError(f"ATLAS graph no longer matches workload {workload_id}")
     calibration_path = output / manifest["calibrations"][str(workload_id)]["path"]
     if sha256(calibration_path) != manifest["calibrations"][str(workload_id)]["sha256"]:
         raise RuntimeError("calibration differs from the prepared manifest")
@@ -417,6 +512,8 @@ def _worker(args) -> None:
         annealing=SCHEDULE,
         intermediate_policy=INTERMEDIATE_POLICY,
         level_callback=progress_callback,
+        atlas_graph=graph,
+        evaluation_profile_path=EVALUATION_PROFILE,
     )
     best_architecture = result["best_architecture"]
     evaluated_objective, raw = evaluate_best_architecture(
@@ -426,6 +523,7 @@ def _worker(args) -> None:
         base_cache=worker_cache,
         log_path=root / "best_evaluation.log",
         profile=result["best_profile"],
+        graph=graph,
     )
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError("independent best-architecture evaluation disagrees with search")
@@ -505,6 +603,9 @@ def _worker(args) -> None:
         "best_architecture_sha256": sha256(root / "best_architecture.json"),
         "initial_architecture_sha256": sha256(root / "initial_architecture.json"),
     }
+    graph_entry = manifest.get("atlas_graphs", {}).get(str(workload_id))
+    if graph_entry is not None:
+        row["atlas_graph_sha256"] = graph_entry["sha256"]
     if result["best_profile"] is not None:
         row["best_profile_sha256"] = sha256(root / "best_profile.json")
     row.update(
@@ -736,6 +837,7 @@ def report(args) -> None:
         f"- Git commit: `{manifest['git_commit']}`",
         f"- Schedule: `{SCHEDULE_NAME}` ({manifest['planned_moves']} moves per run)",
         f"- Policy: `{manifest['intermediate_policy']}`; profile: `t1`",
+        f"- Workload input: `{manifest.get('input_flow', 'compatibility_adapter')}`",
         f"- Calibration model: `{manifest['calibration_model_version']}`; simulation model: `{manifest['simulation_model_version']}`",
         f"- Seed panel: initial `{manifest['seed_panel']['initial_seed_base']}`, search `{manifest['seed_panel']['search_seed_base']}`",
         f"- Valid runs: `{len(runs)}` / `{len(task_list(manifest['workloads'], manifest['runs_per_workload']))}`",
@@ -777,6 +879,13 @@ def parser() -> argparse.ArgumentParser:
     common.add_argument("--base-cache", type=Path, default=BASE_CACHE)
     prepare_parser = sub.add_parser("prepare", parents=[common])
     prepare_parser.add_argument("--calibration-samples", type=positive_int, default=10)
+    prepare_parser.add_argument(
+        "--atlas-graph",
+        action="append",
+        default=[],
+        metavar="WORKLOAD=PATH",
+        help="Keras-derived ATLAS graph for each selected workload",
+    )
     prepare_parser.set_defaults(function=prepare)
     controller_parser = sub.add_parser("start", parents=[common])
     controller_parser.add_argument("--max-workers", type=positive_int, default=4)

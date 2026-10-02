@@ -169,7 +169,7 @@ def planned_move_count(schedule):
 
 
 def calibrate_workload(
-    *, output_dir, workload_id, workload, samples, seed, base_cache
+    *, output_dir, workload_id, workload, samples, seed, base_cache, graph=None
 ):
     calibration_dir = Path(output_dir) / f"workload_{workload_id}"
     calibration_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,7 @@ def calibrate_workload(
             "w", encoding="utf-8"
         ) as log:
             with redirect_stdout(log), redirect_stderr(log):
-                graph = gemm_sequence_to_atlas_graph(workload)
+                evaluation_graph = graph or gemm_sequence_to_atlas_graph(workload)
                 profile = load_evaluation_profile(
                     "cfg/profiles/atlas_modular_v1.json"
                 ).with_movement_policy(f"{INTERMEDIATE_POLICY}_v1")
@@ -205,7 +205,7 @@ def calibrate_workload(
                     calibration_file_path=str(calibration_path),
                     workload_sequence=workload,
                     intermediate_policy=INTERMEDIATE_POLICY,
-                    graph=graph,
+                    graph=evaluation_graph,
                     profile=profile,
                 )
         cache.dump_cache()
@@ -214,7 +214,8 @@ def calibrate_workload(
 
 
 def evaluate_best_architecture(
-    *, architecture, workload, calibration_path, base_cache, log_path, profile=None
+    *, architecture, workload, calibration_path, base_cache, log_path, profile=None,
+    graph=None,
 ):
     with tempfile.TemporaryDirectory(
         prefix="carbonpath-convergence-evaluation-"
@@ -225,7 +226,7 @@ def evaluate_best_architecture(
         )
         with Path(log_path).open("w", encoding="utf-8") as log:
             with redirect_stdout(log), redirect_stderr(log):
-                graph = gemm_sequence_to_atlas_graph(workload)
+                evaluation_graph = graph or gemm_sequence_to_atlas_graph(workload)
                 evaluation_profile = (
                     parse_evaluation_profile(profile)
                     if profile is not None
@@ -242,7 +243,7 @@ def evaluate_best_architecture(
                 design_point, objective = evaluate_atlas_design_point(
                     cache,
                     architecture,
-                    graph,
+                    evaluation_graph,
                     evaluation_profile,
                     objective_model,
                 )
