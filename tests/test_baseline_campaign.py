@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from script.run_baseline_campaign import (
     DEFAULT_WORKLOADS,
+    make_progress_callback,
     run_dir,
     run_lock_available,
     result_is_valid,
@@ -20,6 +21,24 @@ from script.run_baseline_campaign import (
 
 
 class BaselineCampaignTests(unittest.TestCase):
+    def test_progress_file_reports_attempted_and_remaining_moves(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.json"
+            callback = make_progress_callback(
+                path, workload_id=7, run=1, planned_moves=100
+            )
+
+            self.assertEqual(json.loads(path.read_text())["moves_remaining"], 100)
+            callback(None, tuple({} for _ in range(50)))
+            halfway = json.loads(path.read_text())
+            self.assertEqual(halfway["attempted_moves"], 50)
+            self.assertEqual(halfway["moves_remaining"], 50)
+            callback(None, tuple({} for _ in range(50)))
+            complete = json.loads(path.read_text())
+            self.assertEqual(complete["attempted_moves"], 100)
+            self.assertEqual(complete["moves_remaining"], 0)
+            self.assertEqual(complete["status"], "search_complete")
+
     def test_campaign_preparation_rejects_a_dirty_worktree(self):
         completed = CompletedProcess(
             args=["git", "status", "--porcelain"],

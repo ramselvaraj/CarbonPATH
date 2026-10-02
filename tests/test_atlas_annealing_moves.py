@@ -503,6 +503,38 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         self.assertEqual(moved["pkg"]["protocol_2.5d"], "ucie_adv")
         self.assertEqual(len(ChipletSystem(arch_dict=moved).core_dict), 3)
 
+    def test_repeated_sa_count_moves_keep_endpoint_labels_compact(self):
+        params = copy.deepcopy(self.search_space)
+        params["max_sa_chiplets"] = 2
+        params["move_weights"] = {
+            move_name: 1.0 if move_name == "sa_count" else 0.0
+            for move_name in MOVE_TYPES
+        }
+        architecture = self.architecture
+
+        for _ in range(20):
+            architecture, _, _ = mutate_atlas_design_point(
+                architecture,
+                self.profiles[0],
+                params,
+                candidate_profiles=self.profiles,
+                rng=_MoveRng("sa_count", preferred="add"),
+            )
+            architecture, _, _ = mutate_atlas_design_point(
+                architecture,
+                self.profiles[0],
+                params,
+                candidate_profiles=self.profiles,
+                rng=_MoveRng("sa_count", preferred="delete"),
+            )
+
+            endpoints = validate_atlas_architecture(architecture)
+            endpoint_keys = endpoints.sa_keys + endpoints.fpga_keys
+            self.assertEqual(
+                {int(key.split("_", 1)[1]) for key in endpoint_keys},
+                set(range(1, len(endpoint_keys) + 1)),
+            )
+
     def test_protocol_move_only_selects_a_link_compatible_protocol(self):
         moved, _, move = mutate_atlas_design_point(
             self.architecture,

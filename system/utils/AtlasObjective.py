@@ -16,7 +16,7 @@ placement, tensor movement, and transfer cost.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 
@@ -60,6 +60,7 @@ class AtlasDesignPoint:
     embodied_carbon_kg: float
     operational_carbon_kg: float
     operation_count: int
+    diagnostics: dict = field(default_factory=dict, compare=False, repr=False)
 
     def metric(self, name):
         if name not in RAW_METRICS:
@@ -76,6 +77,8 @@ class AtlasDesignPoint:
         ``opeCarbon``) let existing trace/log helpers keep working unchanged.
         """
         raw = dict(asdict(self))
+        diagnostics = raw.pop("diagnostics")
+        raw.update(diagnostics)
         raw.update(
             {
                 "latency": self.latency_ns,

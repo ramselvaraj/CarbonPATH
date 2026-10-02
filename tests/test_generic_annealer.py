@@ -124,6 +124,25 @@ class GenericAnnealerTests(unittest.TestCase):
         self.assertEqual(len(result.trace), 5)
         self.assertEqual([len(rows) for _, rows in levels], [3, 2])
 
+    def test_fixed_schedule_reports_each_completed_temperature_level(self):
+        levels = []
+
+        anneal(
+            initial_design=0,
+            propose=lambda current, _rng: (current - 1, "step"),
+            evaluate=lambda design: (design, float(design)),
+            identity=str,
+            rng=random.Random(1),
+            initial_temperature=4.0,
+            freezing_temperature=1.0,
+            moves_per_temperature=2,
+            cooling_rate=0.5,
+            level_callback=lambda decision, rows: levels.append((decision, rows)),
+        )
+
+        self.assertEqual([len(rows) for _, rows in levels], [2, 2])
+        self.assertTrue(all(decision is None for decision, _ in levels))
+
 
 if __name__ == "__main__":
     unittest.main()

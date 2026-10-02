@@ -19,6 +19,7 @@ from system.utils.ArchitectureModel import (
     supported_package_types,
     validate_modular_architecture,
 )
+from system.utils.ArchitectureIdentity import canonicalize_chiplet_labels
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
@@ -201,11 +202,13 @@ def _mutate_sa_count(architecture, params, rng):
         package_types = supported_package_types(moved, params)
         if package_types:
             preferred_package_type = rng.choice(package_types)
-    return rebuild_package_for_endpoints(
-        moved,
-        params,
-        rng,
-        preferred_package_type=preferred_package_type,
+    return canonicalize_chiplet_labels(
+        rebuild_package_for_endpoints(
+            moved,
+            params,
+            rng,
+            preferred_package_type=preferred_package_type,
+        )
     )
 
 

@@ -30,6 +30,7 @@ from system.utils.Scheduler import CHIP2CHIP_TRANSFER, Scheduler
 from system.utils.ChipletSystem import ChipletSystem
 from system.utils.SimulationCache import SimulationCache
 from system.utils.IntermediateMemoryPolicy import (
+    BoundaryPlan,
     INTERMEDIATE_POLICIES,
     build_boundary_mapping,
     plan_boundary,
@@ -707,6 +708,16 @@ def evaluate_atlas_design_point(
         energy_comm=movement_energy_pj,
         lifetime_years=3,
     )
+    diagnostics = {
+        "intermediate_policy_requested": profile.movement_policy.removesuffix("_v1")
+    }
+    boundary_plans = [
+        result.movement
+        for result in evaluation.results
+        if isinstance(result.movement, BoundaryPlan)
+    ]
+    if boundary_plans:
+        add_boundary_metrics(diagnostics, boundary_plans)
     design_point = AtlasDesignPoint(
         architecture_fingerprint=architecture_fingerprint(architecture),
         profile_name=profile.name,
@@ -722,6 +733,7 @@ def evaluate_atlas_design_point(
         embodied_carbon_kg=_atlas_embodied_carbon(architecture),
         operational_carbon_kg=operational_carbon_kg,
         operation_count=len(evaluation.results),
+        diagnostics=diagnostics,
     )
     return design_point, objective.score(design_point)
 
@@ -1565,6 +1577,7 @@ def sim_annealing(
         raise ValueError("adaptive annealing requires a positive move budget")
 
     graph_was_supplied = atlas_graph is not None
+    calibration_was_supplied = calibration_file_path is not None
     if graph_was_supplied:
         if workload_sequence is not None:
             raise ValueError(
@@ -1612,17 +1625,29 @@ def sim_annealing(
     cache = SimulationCache(cache_file, fast_test=fast_test, simulator_dir=run_name)
 
     if not graph_was_supplied:
-        cost_avg = get_modular_calib_cost_avg(
-            calibration_iterations=calibration_iterations,
-            config_path=input_file_path,
-            cache=cache,
-            calibration_file_path=calibration_file_path,
-            workload_sequence=workload_sequence,
-            intermediate_policy=intermediate_policy,
-            graph=atlas_graph,
-            profile=atlas_profile,
-            registry=registry,
-        )
+        if calibration_was_supplied:
+            with Path(calibration_file_path).open(encoding="utf-8") as file:
+                cost_avg = validate_calibration(json.load(file))
+            expected_identity = calibration_identity(
+                input_file_path, workload_sequence, intermediate_policy
+            )
+            if cost_avg.get("_calibration_identity") != expected_identity:
+                raise ValueError(
+                    "Explicit calibration does not match the search space, "
+                    "workload, and intermediate policy"
+                )
+        else:
+            cost_avg = get_modular_calib_cost_avg(
+                calibration_iterations=calibration_iterations,
+                config_path=input_file_path,
+                cache=cache,
+                calibration_file_path=calibration_file_path,
+                workload_sequence=workload_sequence,
+                intermediate_policy=intermediate_policy,
+                graph=atlas_graph,
+                profile=atlas_profile,
+                registry=registry,
+            )
         atlas_objective = atlas_objective or build_atlas_objective(
             objective_id=cost_profile,
             config={"default": cost_profile},

@@ -71,6 +71,38 @@ def atomic_write(path: Path, value) -> None:
     os.replace(temporary, path)
 
 
+def make_progress_callback(
+    path: Path, *, workload_id: int, run: int, planned_moves: int
+):
+    """Persist exact fixed-schedule move progress after each temperature level."""
+    attempted_moves = 0
+
+    def write(status):
+        atomic_write(
+            path,
+            {
+                "workload_id": workload_id,
+                "run": run,
+                "status": status,
+                "planned_moves": planned_moves,
+                "attempted_moves": attempted_moves,
+                "moves_remaining": max(0, planned_moves - attempted_moves),
+            },
+        )
+
+    def record(_decision, rows):
+        nonlocal attempted_moves
+        attempted_moves += len(rows)
+        write(
+            "search_complete"
+            if attempted_moves >= planned_moves
+            else "searching"
+        )
+
+    write("searching")
+    return record
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -365,6 +397,13 @@ def _worker(args) -> None:
     if not worker_cache.exists():
         initialize_experiment_cache(output / "base_cache.csv", worker_cache)
     started = time.perf_counter()
+    progress_path = root / "progress.json"
+    progress_callback = make_progress_callback(
+        progress_path,
+        workload_id=workload_id,
+        run=run,
+        planned_moves=manifest["planned_moves"],
+    )
     result = run_search(
         label=f"run_{run:02d}",
         output_dir=root.parent,
@@ -377,6 +416,7 @@ def _worker(args) -> None:
         base_cache=worker_cache,
         annealing=SCHEDULE,
         intermediate_policy=INTERMEDIATE_POLICY,
+        level_callback=progress_callback,
     )
     best_architecture = result["best_architecture"]
     evaluated_objective, raw = evaluate_best_architecture(
@@ -477,6 +517,17 @@ def _worker(args) -> None:
         }
     )
     atomic_write(result_path, row)
+    atomic_write(
+        progress_path,
+        {
+            "workload_id": workload_id,
+            "run": run,
+            "status": "complete",
+            "planned_moves": manifest["planned_moves"],
+            "attempted_moves": result["attempted_moves"],
+            "moves_remaining": 0,
+        },
+    )
 
 
 def worker(args) -> None:

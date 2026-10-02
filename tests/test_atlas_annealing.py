@@ -221,6 +221,72 @@ class AtlasAnnealingTests(unittest.TestCase):
         self.assertEqual(call["profile"].movement_policy, "direct_forward_v1")
         self.assertEqual(call["search_space"]["max_sa_chiplets"], 6)
 
+    def test_explicit_calibration_is_loaded_without_regeneration(self):
+        workload = {
+            "name": "two_gemm",
+            "gemms": [
+                {"name": "first", "shape": (8, 16, 32)},
+                {"name": "second", "shape": (8, 32, 4)},
+            ],
+        }
+        calibration = {
+            "_calibration_identity": main.calibration_identity(
+                "cfg/parameters/input.json", workload, "direct_forward"
+            ),
+            "_calibration_samples": 10,
+            "avg_energy": 1.0,
+            "avg_area": 1.0,
+            "avg_dollar_cost": 1.0,
+            "avg_latency": 1.0,
+            "avg_embCarbon": 1.0,
+            "avg_opeCarbon": 1.0,
+        }
+        for metric in ("energy", "area", "cost", "latency", "embCarbon", "opeCarbon"):
+            calibration.update(
+                {
+                    f"{metric}_min": 1.0,
+                    f"{metric}_max": 2.0,
+                    f"{metric}_mean": 1.5,
+                    f"{metric}_stddev": 0.5,
+                    f"{metric}_median": 1.5,
+                }
+            )
+        expected = (1.0, self.architecture, pd.DataFrame(), pd.DataFrame())
+
+        with tempfile.TemporaryDirectory() as directory:
+            calibration_path = Path(directory) / "prepared-calibration.json"
+            calibration_path.write_text(
+                json.dumps(calibration, indent=2), encoding="utf-8"
+            )
+            original_bytes = calibration_path.read_bytes()
+            cache_file = Path(directory) / "cache.csv"
+            pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_file, index=False)
+            with (
+                patch(
+                    "main.get_modular_calib_cost_avg",
+                    side_effect=AssertionError("prepared calibration must be immutable"),
+                ),
+                patch("main._run_modular_annealing", return_value=expected) as modular,
+            ):
+                result = main.sim_annealing(
+                    wl_idx=7,
+                    workload_sequence=workload,
+                    cache_file=str(cache_file),
+                    run_name=str(Path(directory) / "sim"),
+                    cost_profile="t1",
+                    initial_temp=2.0,
+                    freezing_temp=1e-3,
+                    max_move_per_temp_step=1,
+                    cooling_rate=0.5,
+                    calibration_iterations=1,
+                    calibration_file_path=str(calibration_path),
+                    initial_architecture=self.architecture,
+                )
+
+            self.assertIs(result, expected)
+            self.assertEqual(calibration_path.read_bytes(), original_bytes)
+            self.assertEqual(modular.call_args.kwargs["objective"].objective_id, "t1")
+
 
 if __name__ == "__main__":
     unittest.main()

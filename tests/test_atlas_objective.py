@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from main import evaluate_atlas_design_point
-from system.utils.AtlasGraphAdapter import load_atlas_graph
+from system.utils.AtlasGraphAdapter import gemm_sequence_to_atlas_graph, load_atlas_graph
 from system.utils.AtlasObjective import (
     AtlasDesignPoint,
     CalibratedCarbonPathObjective,
@@ -121,6 +121,47 @@ class AtlasObjectiveTests(unittest.TestCase):
         raw = design_point.raw_dict()
         for key in ("latency", "energy", "area", "dollar", "embCarbon", "opeCarbon"):
             self.assertIn(key, raw)
+
+    def test_sequential_gemm_design_point_exposes_boundary_accounting(self):
+        graph = gemm_sequence_to_atlas_graph(
+            {
+                "name": "two_gemm",
+                "gemms": [
+                    {"name": "first", "shape": (8, 16, 32)},
+                    {"name": "second", "shape": (8, 32, 4)},
+                ],
+            }
+        )
+        profile = load_evaluation_profile(REFERENCE_PROFILE).with_movement_policy(
+            "direct_forward_v1"
+        )
+        with patch("main.simulate_single_gemm") as simulate:
+            simulate.return_value = {
+                "latency_ns": 1000.0,
+                "dram_interconnect_energy_pj": 200.0,
+                "sram_energy_pj": 100.0,
+            }
+            design_point, _ = evaluate_atlas_design_point(
+                self._cache(),
+                self.architecture,
+                graph,
+                profile,
+                self.objective,
+            )
+
+        raw = design_point.raw_dict()
+        self.assertEqual(raw["intermediate_policy_requested"], "direct_forward")
+        self.assertGreater(raw["boundary_1_intermediate_bytes"], 0)
+        for suffix in (
+            "selected_method",
+            "retained_bytes",
+            "forwarded_bytes",
+            "dram_spilled_bytes",
+            "dram_traffic_bytes",
+            "latency_ns",
+            "energy_pj",
+        ):
+            self.assertIn(f"boundary_1_{suffix}", raw)
 
     def test_design_point_is_frozen_dataclass(self):
         self.assertTrue(hasattr(AtlasDesignPoint, "__dataclass_fields__"))

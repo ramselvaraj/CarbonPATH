@@ -205,6 +205,8 @@ def anneal(
 
         if temperature_controller is None:
             temperature *= cooling_rate
+            if level_callback is not None:
+                level_callback(None, tuple(level_rows))
         else:
             temperature = temperature_controller.next_temperature(
                 level_index=len(temperature_controller.history),
