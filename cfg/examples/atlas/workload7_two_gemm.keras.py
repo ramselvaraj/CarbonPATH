@@ -34,7 +34,7 @@ HLS_CONFIG = {
 
 
 def build_model():
-    inputs = keras.layers.Input((128, 256), name="input")
+    inputs = keras.layers.Input((128, 256), name="workload_input")
     projection = QDense(
         512,
         activation=None,
