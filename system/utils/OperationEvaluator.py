@@ -16,7 +16,7 @@ registration plus its input adapter, not a new branch in the executor.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -27,6 +27,9 @@ class OperationEstimate:
     evaluator_id: str
     compute_latency_ns: float
     dynamic_energy_pj: float
+    tile_mappings: tuple = ()
+    reduction_latency_ns: float = 0.0
+    reduction_communication_energy_pj: float = 0.0
 
 
 @dataclass
@@ -34,6 +37,8 @@ class EvaluationContext:
     cache: object
     architecture: dict
     system: object
+    evaluator_settings: dict = field(default_factory=dict)
+    prepared_operation: object = None
     activation_from_dram: bool = True
     output_to_dram: bool = True
 
@@ -60,6 +65,10 @@ class OperationEvaluator:
     evaluator_id = ""
     operation_type = ""
     input_adapter_id = ""
+
+    def prepare(self, evaluator_input, placement, context):
+        """Optionally build a reusable mapping/simulation artifact."""
+        return None
 
     def evaluate(
         self, evaluator_input, placement, context
@@ -89,6 +98,10 @@ class EvaluatorBinding:
     def estimate(self, operation, access_plan, placement, context):
         evaluator_input = self.input_adapter.build_input(operation, access_plan)
         return self.evaluator.evaluate(evaluator_input, placement, context)
+
+    def prepare(self, operation, access_plan, placement, context):
+        evaluator_input = self.input_adapter.build_input(operation, access_plan)
+        return self.evaluator.prepare(evaluator_input, placement, context)
 
 
 class EvaluatorRegistry:

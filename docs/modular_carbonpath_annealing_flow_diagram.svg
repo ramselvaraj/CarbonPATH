@@ -1,0 +1,258 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="6360" viewBox="0 0 2400 6360">
+  <defs>
+    <style>
+      .title { font: 700 58px DejaVu Sans, sans-serif; fill: #17202a; }
+      .subtitle { font: 400 28px DejaVu Sans, sans-serif; fill: #5d6875; }
+      .heading { font: 700 35px DejaVu Sans, sans-serif; fill: #17202a; }
+      .body { font: 400 27px DejaVu Sans, sans-serif; fill: #27313b; }
+      .small { font: 400 24px DejaVu Sans, sans-serif; fill: #27313b; }
+      .legend { font: 600 21px DejaVu Sans, sans-serif; fill: #27313b; }
+      .label { font: 700 24px DejaVu Sans, sans-serif; }
+      .arrow { stroke: #5d6875; stroke-width: 7; fill: none; marker-end: url(#arrowhead); }
+      .loop { stroke: #6c43a2; stroke-width: 7; fill: none; marker-end: url(#purplehead); }
+      .fixed { fill: #e8f1ff; stroke: #2b66b1; stroke-width: 5; }
+      .tuned { fill: #fff1ce; stroke: #9a6100; stroke-width: 5; }
+      .process { fill: #e8f7ef; stroke: #237348; stroke-width: 5; }
+      .decision { fill: #f2eaff; stroke: #6c43a2; stroke-width: 5; }
+      .output { fill: #fde9e4; stroke: #a83d27; stroke-width: 5; }
+    </style>
+    <marker id="arrowhead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 11 5 L 0 10 z" fill="#5d6875"/>
+    </marker>
+    <marker id="purplehead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 11 5 L 0 10 z" fill="#6c43a2"/>
+    </marker>
+  </defs>
+
+  <rect width="2400" height="6360" fill="#f6f7f8"/>
+  <text x="1200" y="90" text-anchor="middle" class="title">Keras Network → Modular CarbonPATH Annealing → Best Design</text>
+  <text x="1200" y="140" text-anchor="middle" class="subtitle">How CarbonPATH searches for the best hardware and evaluation choices for one network</text>
+
+  <!-- Legend -->
+  <rect x="250" y="165" width="1900" height="82" rx="20" fill="#ffffff" stroke="#aeb6bf" stroke-width="3"/>
+  <rect x="295" y="190" width="30" height="30" rx="5" class="fixed"/>
+  <text x="340" y="214" class="legend">Fixed network</text>
+  <rect x="650" y="190" width="30" height="30" rx="5" class="tuned"/>
+  <text x="695" y="214" class="legend">Choices the search can change</text>
+  <rect x="1200" y="190" width="30" height="30" rx="5" class="process"/>
+  <text x="1245" y="214" class="legend">Calculations</text>
+  <rect x="1510" y="190" width="30" height="30" rx="5" class="decision"/>
+  <text x="1555" y="214" class="legend">Decision</text>
+  <rect x="1775" y="190" width="30" height="30" rx="5" class="output"/>
+  <text x="1820" y="214" class="legend">Final output</text>
+
+  <!-- 1 -->
+  <rect x="180" y="270" width="2040" height="280" rx="28" class="fixed"/>
+  <text x="230" y="330" class="heading">1. INPUT — Keras / HGQ2 network</text>
+  <text x="250" y="385" class="body">
+    <tspan x="250" dy="0">• Describes the neural-network layers and the order in which they run</tspan>
+    <tspan x="250" dy="42">• Supplies the layer sizes, activations, and quantization settings</tspan>
+    <tspan x="250" dy="42">• Example: Input → QDense → ReLU → QDense → Softmax</tspan>
+    <tspan x="250" dy="42">• The network is fixed during one annealing run</tspan>
+  </text>
+
+  <path d="M1200 550 V565" class="arrow"/>
+
+  <!-- 2 -->
+  <rect x="180" y="590" width="2040" height="320" rx="28" class="process"/>
+  <text x="230" y="650" class="heading">2. Convert the network into an ATLAS graph</text>
+  <text x="250" y="705" class="body">
+    <tspan x="250" dy="0">• Turns the Keras model into a list of operations CarbonPATH can evaluate</tspan>
+    <tspan x="250" dy="42">• Keeps each operation's size and the data passed between operations</tspan>
+    <tspan x="250" dy="42">• Example operations: GEMM, ReLU, and Softmax</tspan>
+    <tspan x="250" dy="42">• Output: an ATLAS graph file</tspan>
+  </text>
+
+  <path d="M1200 910 V975" class="arrow"/>
+
+  <!-- 3 -->
+  <rect x="180" y="1000" width="2040" height="350" rx="28" class="fixed"/>
+  <text x="230" y="1060" class="heading">3. FIXED WORKLOAD — CarbonPATH reads the network</text>
+  <text x="250" y="1115" class="body">
+    <tspan x="250" dy="0">• Reads each operation, its workload size, and where its input data comes from</tspan>
+    <tspan x="250" dy="42">• Establishes the operation order used to evaluate every hardware design</tspan>
+    <tspan x="250" dy="42">• The search changes the hardware and evaluation choices—not the network</tspan>
+    <tspan x="250" dy="42">• A different network starts a new annealing run</tspan>
+  </text>
+
+  <path d="M1200 1350 V1415" class="arrow"/>
+  <path d="M1200 1415 H410 V1470" class="arrow"/>
+  <path d="M1200 1415 V1470" class="arrow"/>
+  <path d="M1200 1415 H1990 V1470" class="arrow"/>
+
+  <!-- 4A -->
+  <rect x="70" y="1500" width="680" height="860" rx="28" class="tuned"/>
+  <text x="110" y="1560" class="heading">4A. Starting hardware design</text>
+  <text x="120" y="1615" class="small">
+    <tspan x="120" dy="0" font-weight="700">Systolic-array chiplets</tspan>
+    <tspan x="120" dy="38">• number of SA chiplets</tspan>
+    <tspan x="120" dy="38">• array size per chiplet</tspan>
+    <tspan x="120" dy="38">• technology node</tspan>
+    <tspan x="120" dy="38">• SRAM capacity</tspan>
+    <tspan x="120" dy="52" font-weight="700">Optional FPGA chiplets</tspan>
+    <tspan x="120" dy="38">• CLBs, BRAMs, DSPs</tspan>
+    <tspan x="120" dy="38">• frequency and operation designs</tspan>
+    <tspan x="120" dy="52" font-weight="700">Memory and package</tspan>
+    <tspan x="120" dy="38">• DDR / HBM configuration</tspan>
+    <tspan x="120" dy="38">• 2D / 2.5D / 3D topology</tspan>
+    <tspan x="120" dy="38">• chiplet connections</tspan>
+    <tspan x="120" dy="38">• communication protocols</tspan>
+    <tspan x="120" dy="52">This is the first design—not fixed.</tspan>
+    <tspan x="120" dy="34">Allowed hardware choices may change.</tspan>
+  </text>
+
+  <!-- 4B -->
+  <rect x="860" y="1500" width="680" height="860" rx="28" class="tuned"/>
+  <text x="900" y="1560" class="heading">4B. How designs are modeled</text>
+  <text x="910" y="1615" class="small">
+    <tspan x="910" dy="0" font-weight="700">Operation models</tspan>
+    <tspan x="910" dy="38">• predict time and energy for</tspan>
+    <tspan x="940" dy="34">GEMM, ReLU, Softmax, etc.</tspan>
+    <tspan x="910" dy="38">• the GEMM model also decides</tspan>
+    <tspan x="940" dy="34">tiling, dataflow, split-K, and</tspan>
+    <tspan x="940" dy="34">how work is shared across SAs</tspan>
+    <tspan x="910" dy="44" font-weight="700">Placement policy</tspan>
+    <tspan x="910" dy="38">• chooses which chiplet or SA group</tspan>
+    <tspan x="940" dy="34">runs each operation</tspan>
+    <tspan x="910" dy="52" font-weight="700">Movement policy</tspan>
+    <tspan x="910" dy="38">• decides whether intermediate data</tspan>
+    <tspan x="940" dy="34">is kept, forwarded, or sent to DRAM</tspan>
+    <tspan x="910" dy="52" font-weight="700">Transfer model</tspan>
+    <tspan x="910" dy="38">• calculates the time and energy</tspan>
+    <tspan x="940" dy="34">needed to move data</tspan>
+  </text>
+
+  <!-- 4C -->
+  <rect x="1650" y="1500" width="680" height="860" rx="28" class="tuned"/>
+  <text x="1690" y="1560" class="heading">4C. Search configuration</text>
+  <text x="1700" y="1615" class="small">
+    <tspan x="1700" dy="0" font-weight="700">Allowed hardware choices</tspan>
+    <tspan x="1700" dy="38">• SA, FPGA, memory, package,</tspan>
+    <tspan x="1730" dy="34">and communication options</tspan>
+    <tspan x="1700" dy="52" font-weight="700">Profile choices</tspan>
+    <tspan x="1700" dy="38">• allowed operation, placement,</tspan>
+    <tspan x="1730" dy="34">data-movement, and transfer models</tspan>
+    <tspan x="1700" dy="52" font-weight="700">How designs are scored</tspan>
+    <tspan x="1700" dy="38">• balances speed, energy, area,</tspan>
+    <tspan x="1730" dy="34">dollar cost, and carbon</tspan>
+    <tspan x="1700" dy="38">• calibration makes unlike metrics</tspan>
+    <tspan x="1730" dy="34">comparable before combining them</tspan>
+    <tspan x="1700" dy="44" font-weight="700">Annealing schedule</tspan>
+    <tspan x="1700" dy="38">• temperatures, cooling, moves,</tspan>
+    <tspan x="1730" dy="34">random seed, stopping condition</tspan>
+  </text>
+
+  <path d="M410 2360 V2420 H1200" class="arrow"/>
+  <path d="M1200 2360 V2450" class="arrow"/>
+  <path d="M1990 2360 V2420 H1200" class="arrow"/>
+
+  <!-- 5 -->
+  <rect x="180" y="2480" width="2040" height="720" rx="28" class="process"/>
+  <text x="230" y="2540" class="heading">5. Evaluate the starting design</text>
+  <text x="250" y="2595" class="body">
+    <tspan x="250" dy="0">• Check that the hardware design is valid</tspan>
+    <tspan x="250" dy="42">• Calculate its area, power, memory bandwidth, and chiplet connections</tspan>
+    <tspan x="250" dy="54" font-weight="700">Then run through the network:</tspan>
+    <tspan x="250" dy="42">1. Choose where each operation runs</tspan>
+    <tspan x="250" dy="42">2. Make its input data available there</tspan>
+    <tspan x="250" dy="42">3. Calculate the cost of moving that data</tspan>
+    <tspan x="250" dy="42">4. Calculate the operation's execution time and energy</tspan>
+    <tspan x="250" dy="42">5. For GEMM, divide the work across the selected systolic arrays</tspan>
+    <tspan x="250" dy="54" font-weight="700">After all operations:</tspan>
+    <tspan x="250" dy="42">• add up execution and data-movement time and energy</tspan>
+    <tspan x="250" dy="42">• calculate total area, dollar cost, and carbon</tspan>
+    <tspan x="250" dy="42">• combine the results into one score; lower is better</tspan>
+  </text>
+
+  <path d="M1200 3200 V3265" class="arrow"/>
+
+  <!-- 6 -->
+  <rect x="180" y="3290" width="2040" height="760" rx="28" class="tuned"/>
+  <text x="230" y="3350" class="heading">6. Create one candidate — copy current design, then make one allowed change</text>
+  <text x="250" y="3410" class="body">
+    <tspan x="250" dy="0" font-weight="700">Systolic-array changes</tspan>
+    <tspan x="250" dy="42">• SA count (if allowed)  • array size  • technology node  • SRAM capacity</tspan>
+    <tspan x="250" dy="54" font-weight="700">GEMM execution changes</tspan>
+    <tspan x="250" dy="42">• dataflow  • split-K  • the order and method used to divide work across SAs</tspan>
+    <tspan x="250" dy="54" font-weight="700">FPGA changes</tspan>
+    <tspan x="250" dy="42">• add/remove FPGA chiplet  • CLBs  • BRAMs  • DSPs  • frequency  • operation design</tspan>
+    <tspan x="250" dy="54" font-weight="700">Memory and package changes</tspan>
+    <tspan x="250" dy="42">• memory type  • package layout  • chiplet connections  • communication protocol</tspan>
+    <tspan x="250" dy="54" font-weight="700">Evaluation-model changes</tspan>
+    <tspan x="250" dy="42">• change how operations are placed, evaluated, or how their data is moved</tspan>
+    <tspan x="250" dy="58" font-weight="700">The network itself never changes.</tspan>
+  </text>
+
+  <path d="M1200 4050 V4115" class="arrow"/>
+
+  <!-- 7 -->
+  <rect x="180" y="4140" width="2040" height="480" rx="28" class="process"/>
+  <text x="230" y="4200" class="heading">7. Validate and fully evaluate the candidate</text>
+  <text x="250" y="4255" class="body">
+    <tspan x="250" dy="0">• Rebuild the hardware model after the change</tspan>
+    <tspan x="250" dy="42">• Reject the design if its hardware and evaluation choices do not work together</tspan>
+    <tspan x="250" dy="42">• Evaluate the complete network again using the steps in Block 5</tspan>
+    <tspan x="250" dy="42">• Recalculate time, energy, power, area, dollar cost, and carbon</tspan>
+    <tspan x="250" dy="42">• Combine those results into the candidate's score</tspan>
+    <tspan x="250" dy="42">• Compare the candidate's score with the current design's score</tspan>
+  </text>
+
+  <path d="M1200 4620 V4685" class="arrow"/>
+
+  <!-- 8 -->
+  <rect x="340" y="4710" width="1720" height="320" rx="90" class="decision"/>
+  <text x="1200" y="4770" text-anchor="middle" class="heading">8. Accept the candidate?</text>
+  <text x="1200" y="4830" text-anchor="middle" class="body">
+    <tspan x="1200" dy="0">A better score is always accepted</tspan>
+    <tspan x="1200" dy="46">A worse score may still be accepted, depending on the current temperature</tspan>
+    <tspan x="1200" dy="46">This allows broad exploration early and becomes more selective as the search cools</tspan>
+  </text>
+
+  <path d="M900 5030 V5100 H730 V5155" class="arrow"/>
+  <text x="735" y="5085" class="label" fill="#237348">ACCEPT</text>
+  <path d="M1500 5030 V5100 H1670 V5155" class="arrow"/>
+  <text x="1535" y="5085" class="label" fill="#a83d27">REJECT</text>
+
+  <!-- 9A/9B -->
+  <rect x="320" y="5180" width="820" height="210" rx="28" class="process"/>
+  <text x="370" y="5240" class="heading">9A. Accepted</text>
+  <text x="390" y="5295" class="body">
+    <tspan x="390" dy="0">• Candidate becomes the current design</tspan>
+    <tspan x="390" dy="42">• If it is the best so far, save it as best</tspan>
+  </text>
+
+  <rect x="1260" y="5180" width="820" height="210" rx="28" class="process"/>
+  <text x="1310" y="5240" class="heading">9B. Rejected</text>
+  <text x="1330" y="5295" class="body">
+    <tspan x="1330" dy="0">• Keep the current design</tspan>
+    <tspan x="1330" dy="42">• Best design remains unchanged</tspan>
+  </text>
+
+  <path d="M730 5390 V5455 H1200" class="arrow"/>
+  <path d="M1670 5390 V5455 H1200" class="arrow"/>
+
+  <!-- 10 -->
+  <rect x="360" y="5485" width="1680" height="260" rx="28" class="process"/>
+  <text x="410" y="5545" class="heading">10. Record the result and continue the search</text>
+  <text x="430" y="5600" class="body">
+    <tspan x="430" dy="0">• Log the change, score, and accept/reject decision</tspan>
+    <tspan x="430" dy="42">• Propose more designs while gradually lowering the temperature</tspan>
+    <tspan x="430" dy="42">• Stop when the temperature is low enough or the move limit is reached</tspan>
+  </text>
+
+  <path d="M360 5615 H35 V3670 H150" class="loop"/>
+  <text x="50" y="3625" class="label" fill="#6c43a2">REPEAT</text>
+  <path d="M1200 5745 V5810" class="arrow"/>
+  <text x="1240" y="5795" class="label" fill="#5d6875">FINISHED</text>
+
+  <!-- 11 -->
+  <rect x="180" y="5840" width="2040" height="400" rx="28" class="output"/>
+  <text x="230" y="5900" class="heading">11. OUTPUT — return the best modular design found</text>
+  <text x="250" y="5955" class="body">
+    <tspan x="250" dy="0">• best architecture and the evaluation choices used with it</tspan>
+    <tspan x="250" dy="42">• best score and the measurements behind that score</tspan>
+    <tspan x="250" dy="42">• per-operation placement, GEMM mapping, movement, and evaluation details</tspan>
+    <tspan x="250" dy="42">• search history showing every attempted change and decision</tspan>
+    <tspan x="250" dy="54" font-weight="700">One modular flow evaluates every supported network and architecture combination.</tspan>
+  </text>
+</svg>

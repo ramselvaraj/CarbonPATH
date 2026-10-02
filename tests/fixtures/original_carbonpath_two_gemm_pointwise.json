@@ -1,0 +1,64 @@
+{
+  "fixture_version": 1,
+  "source": "original CarbonPATH simulate_latency_energy",
+  "architecture_fingerprint": "d29e5669aa5e",
+  "atlas_graph_fingerprint": "f3b0a012a1a8",
+  "simulation_model_version": 2,
+  "workload": {
+    "name": "two_gemm_pointwise_fixture",
+    "gemms": [
+      {"name": "stage_1", "shape": [8, 16, 32]},
+      {"name": "stage_2", "shape": [8, 32, 16]}
+    ]
+  },
+  "tile_mappings": [
+    [
+      {
+        "core_id": 0,
+        "m": 8,
+        "k": 16,
+        "n": 32,
+        "m_offset": 0,
+        "k_offset": 0,
+        "n_offset": 0
+      }
+    ],
+    [
+      {
+        "core_id": 0,
+        "m": 8,
+        "k": 32,
+        "n": 16,
+        "m_offset": 0,
+        "k_offset": 0,
+        "n_offset": 0
+      }
+    ]
+  ],
+  "policies": {
+    "cold_dram": {
+      "latency_ns": 408.0,
+      "communication_energy_pj": 71680.0,
+      "sram_energy_pj": 2430.074208256,
+      "boundary_methods": ["cold_dram"]
+    },
+    "ideal_on_chip": {
+      "latency_ns": 404.0,
+      "communication_energy_pj": 51200.0,
+      "sram_energy_pj": 2430.074208256,
+      "boundary_methods": ["ideal_on_chip"]
+    },
+    "local_sram": {
+      "latency_ns": 404.0,
+      "communication_energy_pj": 51200.0,
+      "sram_energy_pj": 2430.074208256,
+      "boundary_methods": ["local_sram"]
+    },
+    "direct_forward": {
+      "latency_ns": 404.0,
+      "communication_energy_pj": 51200.0,
+      "sram_energy_pj": 2430.074208256,
+      "boundary_methods": ["local_sram"]
+    }
+  }
+}

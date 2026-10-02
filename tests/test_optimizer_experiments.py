@@ -1,8 +1,14 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+
+import pandas as pd
 
 from script.run_optimizer_experiments import (
     REDUCED_SEARCH_SPACE,
     build_reduced_candidates,
+    persist_best_profile,
     wilson_interval,
 )
 from script.run_full_space_convergence import SCHEDULES, planned_move_count
@@ -10,6 +16,27 @@ from system.utils.ArchitectureIdentity import architecture_fingerprint
 
 
 class OptimizerExperimentTests(unittest.TestCase):
+    def test_modular_search_persists_its_best_evaluation_profile(self):
+        trace = pd.DataFrame({"best_cost": [1.0]})
+        trace.attrs["best_profile"] = {
+            "profile": "atlas_modular_v1",
+            "version": 1,
+            "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
+            "placement_policy": "all_sas_single_fpga_v1",
+            "movement_policy": "direct_forward_v1",
+            "transfer_model": "route_transfer_v1",
+        }
+        trace.attrs["best_profile_fingerprint"] = "abc123"
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = persist_best_profile(trace, Path(directory))
+            stored = json.loads(
+                (Path(directory) / "best_profile.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(stored, trace.attrs["best_profile"])
+        self.assertEqual(result["best_profile_fingerprint"], "abc123")
+
     def test_reduced_space_contains_96_unique_candidates(self):
         candidates = build_reduced_candidates(REDUCED_SEARCH_SPACE)
 

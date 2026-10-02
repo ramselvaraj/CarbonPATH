@@ -358,6 +358,81 @@ def parse_atlas_graph(nodes, name):
     )
 
 
+def gemm_sequence_to_atlas_graph(workload_sequence):
+    """Translate a normalized sequential-GEMM workload into an ATLAS graph.
+
+    This is the compatibility input adapter for CarbonPATH's original workload
+    format.  Evaluation still proceeds through the normal ATLAS operation,
+    placement, movement, and transfer-model interfaces.
+    """
+    if not isinstance(workload_sequence, Mapping):
+        raise ValueError("GEMM workload sequence must be an object")
+    name = workload_sequence.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("GEMM workload sequence must have a non-empty name")
+    gemms = workload_sequence.get("gemms")
+    if not isinstance(gemms, (list, tuple)) or not gemms:
+        raise ValueError("GEMM workload sequence must contain at least one GEMM")
+
+    nodes = []
+    normalized = []
+    names = set()
+    for index, gemm in enumerate(gemms, start=1):
+        if not isinstance(gemm, Mapping):
+            raise ValueError(f"GEMM {index} must be an object")
+        gemm_name = gemm.get("name")
+        if not isinstance(gemm_name, str) or not gemm_name:
+            raise ValueError(f"GEMM {index} must have a non-empty name")
+        if gemm_name in names:
+            raise ValueError(f"GEMM names must be unique: {gemm_name}")
+        shape = gemm.get("shape")
+        if (
+            not isinstance(shape, (list, tuple))
+            or len(shape) != 3
+            or any(
+                isinstance(dimension, bool)
+                or not isinstance(dimension, int)
+                or dimension <= 0
+                for dimension in shape
+            )
+        ):
+            raise ValueError(
+                f"GEMM '{gemm_name}' must have three positive integer dimensions"
+            )
+        normalized.append((gemm_name, tuple(shape)))
+        names.add(gemm_name)
+
+    for (producer_name, producer_shape), (consumer_name, consumer_shape) in zip(
+        normalized, normalized[1:]
+    ):
+        producer_m, _, producer_n = producer_shape
+        consumer_m, consumer_k, _ = consumer_shape
+        if consumer_m != producer_m or consumer_k != producer_n:
+            raise ValueError(
+                f"GEMM '{consumer_name}' must consume '{producer_name}' output: "
+                f"expected M={producer_m}, K={producer_n}, "
+                f"got M={consumer_m}, K={consumer_k}"
+            )
+
+    previous = "input_layer"
+    for index, (gemm_name, (m, k, n)) in enumerate(normalized, start=1):
+        nodes.append(
+            {
+                "name": f"gemm_{gemm_name}",
+                "class": "Gemm",
+                "inputs": [{"name": previous, "shape": [m, k]}],
+                "output": {"shape": [m, n]},
+                "weights": [
+                    {"name": f"weight_{index}", "shape": [n, k]}
+                ],
+                "attrs": {"weights_in_core": True},
+            }
+        )
+        previous = gemm_name
+
+    return parse_atlas_graph(nodes, name)
+
+
 def _sanitize_name(value):
     cleaned = "".join(
         character if character.isalnum() or character in "._-" else "_"

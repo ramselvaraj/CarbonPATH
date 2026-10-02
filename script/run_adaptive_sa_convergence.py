@@ -322,6 +322,7 @@ def _run_worker(args: argparse.Namespace) -> None:
         calibration_path=Path(args.calibration),
         base_cache=worker_cache,
         log_path=run_dir / "best_evaluation.log",
+        profile=result["best_profile"],
     )
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError(

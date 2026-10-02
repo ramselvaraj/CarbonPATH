@@ -514,8 +514,8 @@ class Scheduler:
         #top-level function to launch system modeling, return the modeled total latency and energy 
         # construct latency timeline for every core: Phase1: from dram_load to finish compute
         cores: list[SystolicArray] = list (system.core_dict.values())
-        core_time_stamp = np.zeros((len(cores))) # dram_load latency + compute latency
-        core_energy_stamp = np.zeros((len(cores))) # dram load energy + transferred energy
+        core_time_stamp = {core.id: 0.0 for core in cores}
+        core_energy_stamp = {core.id: 0.0 for core in cores}
 
         max_core = max(cores)
         for core in cores:
@@ -528,7 +528,7 @@ class Scheduler:
             core_time_stamp[core.id] += core.total_cycle / core.frequency * 10**9 # accu total compute latency in ns
             core_energy_stamp[core.id] += dram_energy_pj
             
-        compute_time = max(core_time_stamp)
+        compute_time = max(core_time_stamp.values())
         
         if self.splitting_k:
             total_interconnect_latency, total_interconnect_energy = self.__calculate_interconnect_latency_energy_with_separate_controller(system)
@@ -554,7 +554,16 @@ class Scheduler:
             write_back_latency_ns = 0
             write_back_energy = 0
 
-        total_energy = np.sum(core_energy_stamp) + total_interconnect_energy
+        core_energy = sum(core_energy_stamp.values())
+        total_energy = core_energy + total_interconnect_energy
+        self.last_modeling_details = {
+            "compute_time_ns": float(compute_time),
+            "reduction_transfer_latency_ns": float(total_interconnect_latency),
+            "reduction_latency_ns": float(reduction_latency),
+            "reduction_communication_energy_pj": float(total_interconnect_energy),
+            "write_back_latency_ns": float(write_back_latency_ns),
+            "write_back_energy_pj": float(write_back_energy),
+        }
 
         if print_info:
             print(f"[INFO] reduction_latency:                {reduction_latency:.3e}")
@@ -563,7 +572,7 @@ class Scheduler:
             print(f"LATENCY_END\n")  
             print(f"ENERGY_START")     
             print(f"[INFO] Write back energy (pj):           {write_back_energy:.3e}")
-            print(f"[INFO] Core dram energy w WB energy(pj): {np.sum(core_energy_stamp):.3e}")
+            print(f"[INFO] Core dram energy w WB energy(pj): {core_energy:.3e}")
             print(f"[INFO] Comm'n energy stamp(pj):          {total_interconnect_energy:.3e}")
             print(f"[INFO] DRAM+Comm'n  Energy(pJ):          {total_energy:.3e}\n")
             print(f"ENERGY_END\n")

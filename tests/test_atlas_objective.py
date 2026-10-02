@@ -10,9 +10,11 @@ from main import evaluate_atlas_design_point
 from system.utils.AtlasGraphAdapter import load_atlas_graph
 from system.utils.AtlasObjective import (
     AtlasDesignPoint,
+    CalibratedCarbonPathObjective,
     RawWeightedSumObjective,
     build_atlas_objective,
 )
+from chiplet.n_utils import calculate_system_normalized_metrics
 from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.SimulationCache import SimulationCache
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
@@ -122,6 +124,73 @@ class AtlasObjectiveTests(unittest.TestCase):
 
     def test_design_point_is_frozen_dataclass(self):
         self.assertTrue(hasattr(AtlasDesignPoint, "__dataclass_fields__"))
+
+    def test_t1_through_t4_match_the_existing_scoring_engine(self):
+        design_point = self._design_point(REFERENCE_PROFILE)[0]
+        calibration = {}
+        values = {
+            "energy": design_point.total_energy_pj,
+            "latency": design_point.latency_ns,
+            "area": design_point.area_mm2,
+            "cost": design_point.cost_usd,
+            "embCarbon": design_point.embodied_carbon_kg,
+            "opeCarbon": design_point.operational_carbon_kg,
+        }
+        average_names = {
+            "energy": "avg_energy",
+            "latency": "avg_latency",
+            "area": "avg_area",
+            "cost": "avg_dollar_cost",
+            "embCarbon": "avg_embCarbon",
+            "opeCarbon": "avg_opeCarbon",
+        }
+        for metric, value in values.items():
+            baseline = max(float(value), 1.0)
+            calibration[average_names[metric]] = baseline
+            calibration[f"{metric}_min"] = baseline * 0.5
+            calibration[f"{metric}_max"] = baseline * 2.0
+            calibration[f"{metric}_mean"] = baseline
+            calibration[f"{metric}_stddev"] = baseline * 0.25
+            calibration[f"{metric}_median"] = baseline * 1.25
+
+        for profile_name in ("t1", "t2", "t3", "t4"):
+            with self.subTest(profile_name=profile_name):
+                modular = build_atlas_objective(
+                    objective_id=profile_name,
+                    config={"default": profile_name},
+                    calibration=calibration,
+                    normalization_mode="min_median",
+                ).score(design_point)
+                existing, _, _ = calculate_system_normalized_metrics(
+                    power=0,
+                    area=design_point.area_mm2,
+                    energy=design_point.total_energy_pj,
+                    energy_sram=0,
+                    dollar=design_point.cost_usd,
+                    latency=design_point.latency_ns,
+                    embCarbon=design_point.embodied_carbon_kg,
+                    opeCarbon=design_point.operational_carbon_kg,
+                    profile_name=profile_name,
+                    cost_averages=calibration,
+                    arch_dict={},
+                )
+                self.assertAlmostEqual(modular, existing)
+
+    def test_calibrated_objective_requires_complete_calibration(self):
+        with self.assertRaisesRegex(UnsupportedEvaluation, "missing"):
+            CalibratedCarbonPathObjective(
+                "t1",
+                {
+                    "energy_coff": 1,
+                    "perf_coeff": 1,
+                    "area_coeff": 1,
+                    "cost_coeff": 1,
+                    "embc_coeff": 0,
+                    "opec_coeff": 0,
+                },
+                {},
+                "min_median",
+            )
 
 
 if __name__ == "__main__":

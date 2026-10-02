@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -9,19 +10,23 @@ import pandas as pd
 
 from main import (
     TensorAccessPlan,
+    build_scheduler_system,
     build_default_evaluator_registry,
     evaluate_atlas_graph,
 )
 from network import evaluate_atlas_network, evaluate_network
 from system.utils.AtlasGraphAdapter import (
     AtlasOperation,
+    gemm_sequence_to_atlas_graph,
     load_atlas_graph,
     parse_atlas_graph,
 )
 from system.utils.EvaluationProfile import (
     DEFAULT_PROFILE_PATH,
     load_evaluation_profile,
+    parse_evaluation_profile,
 )
+from system.utils.GEMMWorkload import GEMMWorkload
 from system.utils.NonGemmEstimator import (
     LegacyReluInputAdapter,
     PlaceholderHlsReluInputAdapter,
@@ -29,6 +34,7 @@ from system.utils.NonGemmEstimator import (
 )
 from system.utils.OperationEvaluator import EvaluatorRegistry
 from system.utils.OperationPlacement import (
+    AllSystolicArraysSingleFpgaPlacement,
     FixedSingleSaSingleFpgaPlacement,
     build_placement_policy,
 )
@@ -56,7 +62,7 @@ FUNNEL_FINGERPRINT = "810bd39b27e0"
 SOFTMAX_FINGERPRINT = "88cd5accb4ca"
 MIXED_FIXTURE_FINGERPRINT = "abf1849faedc"
 LEGACY_PROFILE_FINGERPRINT = "8f477eb548ff"
-PLACEHOLDER_PROFILE_FINGERPRINT = "269e1faefe2b"
+PLACEHOLDER_PROFILE_FINGERPRINT = "dfcbcb692276"
 
 GOLDEN = {
     "latency_ns": 133648.7947773606,
@@ -110,6 +116,51 @@ def _relu_node(**overrides):
 
 
 class AtlasGraphAdapterTests(unittest.TestCase):
+    def test_converts_sequential_gemm_workload_to_atlas_graph(self):
+        workload = {
+            "id": 7,
+            "name": "projection_head",
+            "gemms": [
+                {"name": "projection", "shape": (8, 16, 32)},
+                {"name": "head", "shape": (8, 32, 4)},
+            ],
+        }
+
+        graph = gemm_sequence_to_atlas_graph(workload)
+
+        self.assertEqual(graph.name, "projection_head")
+        self.assertEqual(
+            [operation.operation_id for operation in graph.operations],
+            ["gemm_projection", "gemm_head"],
+        )
+        self.assertEqual(
+            [operation.gemm_shape for operation in graph.operations],
+            [(8, 16, 32), (8, 32, 4)],
+        )
+        self.assertEqual(graph.operations[0].input_tensor_id, "input_layer")
+        self.assertEqual(graph.operations[1].input_tensor_id, "projection")
+
+    def test_gemm_sequence_conversion_is_deterministic(self):
+        workload = {
+            "name": "one_gemm",
+            "gemms": [{"name": "only", "shape": (1, 16, 8)}],
+        }
+        first = gemm_sequence_to_atlas_graph(workload)
+        second = gemm_sequence_to_atlas_graph(copy.deepcopy(workload))
+        self.assertEqual(first.canonical_json, second.canonical_json)
+        self.assertEqual(first.fingerprint(), second.fingerprint())
+
+    def test_gemm_sequence_conversion_rejects_broken_chain(self):
+        workload = {
+            "name": "broken",
+            "gemms": [
+                {"name": "first", "shape": (8, 16, 32)},
+                {"name": "second", "shape": (4, 32, 8)},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "must consume 'first' output"):
+            gemm_sequence_to_atlas_graph(workload)
+
     def test_loads_direct_atlas_dump(self):
         graph = load_atlas_graph(FIXTURE)
         types = [operation.operation_type for operation in graph.operations]
@@ -257,9 +308,53 @@ class EvaluationProfileTests(unittest.TestCase):
             PLACEHOLDER_PROFILE_FINGERPRINT,
         )
 
+    def test_profile_can_select_an_original_gemm_movement_policy(self):
+        original = load_evaluation_profile("cfg/profiles/atlas_modular_v1.json")
+
+        selected = original.with_movement_policy("direct_forward_v1")
+
+        self.assertEqual(selected.movement_policy, "direct_forward_v1")
+        self.assertEqual(original.movement_policy, "activation_boundary_v1")
+        self.assertEqual(selected.evaluators, original.evaluators)
+        self.assertEqual(selected.placement_policy, original.placement_policy)
+        self.assertEqual(selected.transfer_model, original.transfer_model)
+
     def test_unknown_operation_type_is_unsupported(self):
         with self.assertRaises(UnsupportedEvaluation):
             load_evaluation_profile().evaluator_id_for("layernorm")
+
+    def test_gemm_mapping_settings_belong_to_the_gemm_evaluator(self):
+        profile = parse_evaluation_profile(
+            {
+                "profile": "configured_gemm",
+                "version": 1,
+                "evaluators": {
+                    "gemm": {
+                        "id": "legacy_scale_sim_gemm_v1",
+                        "settings": {
+                            "dataflow": "ws",
+                            "split_k": True,
+                            "assignment_order": "ascending",
+                        },
+                    }
+                },
+                "placement_policy": "fixed_single_sa_single_fpga_v1",
+                "movement_policy": "activation_boundary_v1",
+                "transfer_model": "route_transfer_v1",
+            }
+        )
+
+        self.assertEqual(
+            profile.evaluator_id_for("gemm"), "legacy_scale_sim_gemm_v1"
+        )
+        self.assertEqual(
+            profile.evaluator_settings_for("gemm"),
+            {
+                "dataflow": "ws",
+                "split_k": True,
+                "assignment_order": "ascending",
+            },
+        )
 
 
 class InputAdapterTests(unittest.TestCase):
@@ -354,6 +449,13 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(UnsupportedEvaluation):
             build_movement_service("nope", TransferEstimator())
 
+    def test_original_gemm_memory_policies_resolve_by_id(self):
+        for policy in ("cold_dram", "ideal_on_chip", "local_sram", "direct_forward"):
+            with self.subTest(policy=policy):
+                service = build_movement_service(f"{policy}_v1")
+                self.assertTrue(service.requires_prepared_operations)
+                self.assertEqual(service.intermediate_policy, policy)
+
     def test_transfer_cost_model_resolves_by_id(self):
         model = build_transfer_cost_model("route_transfer_v1")
         self.assertIsInstance(model, TransferEstimator)
@@ -376,6 +478,25 @@ class PlacementTests(unittest.TestCase):
         )
         with self.assertRaises(UnsupportedEvaluation):
             FixedSingleSaSingleFpgaPlacement(system)
+
+    def test_all_sa_policy_returns_the_complete_sa_group(self):
+        system = SimpleNamespace(
+            core_dict={0: object(), 2: object(), 4: object()},
+            fpga_chiplet_dict={5: object()},
+        )
+
+        placement = AllSystolicArraysSingleFpgaPlacement(system).endpoint_for("gemm")
+
+        self.assertEqual(placement.endpoint_ids, (0, 2, 4))
+        self.assertIsNone(placement.endpoint_id)
+
+    def test_all_sa_policy_allows_an_sa_only_gemm_system(self):
+        system = SimpleNamespace(core_dict={0: object(), 1: object()}, fpga_chiplet_dict={})
+        policy = AllSystolicArraysSingleFpgaPlacement(system)
+
+        self.assertEqual(policy.endpoint_for("gemm").endpoint_ids, (0, 1))
+        with self.assertRaisesRegex(UnsupportedEvaluation, "requires an FPGA"):
+            policy.endpoint_for("relu")
 
 
 class TensorMovementServiceTests(unittest.TestCase):
@@ -426,6 +547,159 @@ class AtlasEvaluationTests(unittest.TestCase):
         self.assertEqual(evaluation.summary["relu_count"], 3)
         self.assertEqual(evaluation.summary["operation_count"], 7)
         self.assertEqual(evaluation.summary["operation_counts"], {"gemm": 4, "relu": 3})
+
+    def test_gemm_evaluator_uses_mapping_settings_from_profile(self):
+        graph = parse_atlas_graph([_gemm_node()], "configured_gemm")
+        profile = parse_evaluation_profile(
+            {
+                "profile": "configured_gemm",
+                "version": 1,
+                "evaluators": {
+                    "gemm": {
+                        "id": "legacy_scale_sim_gemm_v1",
+                        "settings": {
+                            "dataflow": "os",
+                            "split_k": True,
+                            "assignment_order": "ascending",
+                        },
+                    }
+                },
+                "placement_policy": "fixed_single_sa_single_fpga_v1",
+                "movement_policy": "activation_boundary_v1",
+                "transfer_model": "route_transfer_v1",
+            }
+        )
+        original_mapping = json.loads(json.dumps(self.architecture["WL_mapping"]))
+        simulated = {
+            "latency_ns": 1.0,
+            "dram_interconnect_energy_pj": 2.0,
+            "sram_energy_pj": 3.0,
+        }
+
+        with patch("main.simulate_single_gemm", return_value=simulated) as simulate:
+            evaluate_atlas_graph(
+                self._cache(), self.architecture, graph, profile=profile
+            )
+
+        evaluated_architecture = simulate.call_args.args[1]
+        mapping = evaluated_architecture["WL_mapping"]["mapping"]
+        self.assertEqual(mapping["dataflow"], ["os"])
+        self.assertEqual(mapping["if_splitting_k"], 1)
+        self.assertEqual(mapping["assign_workload_in_ascending_order"], 1)
+        self.assertEqual(self.architecture["WL_mapping"], original_mapping)
+
+    def test_multi_sa_gemm_uses_the_complete_placement_group(self):
+        graph = parse_atlas_graph([_gemm_node()], "multi_sa_gemm")
+        architecture = _load(ARCHITECTURE)
+        architecture["Chiplet_3"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"]["Chiplet_3"] = 4
+        architecture["pkg"]["inter_pkg_conn"].append(
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet",
+            }
+        )
+        profile = parse_evaluation_profile(
+            {
+                "profile": "multi_sa",
+                "version": 1,
+                "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
+                "placement_policy": "all_sas_single_fpga_v1",
+                "movement_policy": "activation_boundary_v1",
+                "transfer_model": "route_transfer_v1",
+            }
+        )
+        simulated = {
+            "latency_ns": 1.0,
+            "dram_interconnect_energy_pj": 2.0,
+            "sram_energy_pj": 3.0,
+            "tile_mappings": (
+                {"core_id": 0, "m": 128, "k": 64, "n": 256},
+                {"core_id": 2, "m": 128, "k": 64, "n": 256},
+            ),
+        }
+
+        with patch("main.simulate_single_gemm", return_value=simulated):
+            evaluation = evaluate_atlas_graph(
+                self._cache(), architecture, graph, profile=profile
+            )
+
+        self.assertEqual(evaluation.results[0].endpoint_ids, (0, 2))
+        self.assertEqual(
+            {tile["core_id"] for tile in evaluation.results[0].tile_mappings},
+            {0, 2},
+        )
+
+    def test_mapped_gemm_policy_controls_intermediate_dram_access(self):
+        first = _gemm_node(name="gemm_first")
+        second = _gemm_node(
+            name="gemm_second",
+            inputs=[{"name": "first", "shape": [128, 256]}],
+            output={"shape": [128, 64]},
+            weights=[{"name": "w2", "shape": [64, 256]}],
+        )
+        graph = parse_atlas_graph([first, second], "two_gemms")
+        architecture = {
+            key: copy.deepcopy(value)
+            for key, value in self.architecture.items()
+            if key != "Chiplet_2"
+        }
+        architecture["pkg"] = {
+            "HI_pkg_type": "2d",
+            "inter_pkg_conn": "2d_na",
+            "protocol_3d": "na",
+            "protocol_2.5d": "na",
+            "mem_pkg_conn": {"mem_type": "hbm2", "Chiplet_1": 4},
+        }
+        simulated = {
+            "latency_ns": 1.0,
+            "dram_interconnect_energy_pj": 2.0,
+            "sram_energy_pj": 3.0,
+        }
+        expected = {
+            "cold_dram": ("cold_dram", True),
+            "ideal_on_chip": ("ideal_on_chip", False),
+            "local_sram": ("local_sram", False),
+            "direct_forward": ("local_sram", False),
+        }
+        for policy, (selected_method, uses_dram) in expected.items():
+            with self.subTest(policy=policy):
+                profile = parse_evaluation_profile(
+                    {
+                        "profile": f"mapped_gemm_{policy}",
+                        "version": 1,
+                        "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
+                        "placement_policy": "all_sas_single_fpga_v1",
+                        "movement_policy": f"{policy}_v1",
+                        "transfer_model": "route_transfer_v1",
+                    }
+                )
+                prepared = [
+                    build_scheduler_system(
+                        GEMMWorkload(*operation.gemm_shape), architecture
+                    )
+                    for operation in graph.operations
+                ]
+
+                with patch("main.prepare_single_gemm", side_effect=prepared), patch(
+                    "main.simulate_single_gemm", return_value=simulated
+                ) as simulate:
+                    evaluation = evaluate_atlas_graph(
+                        self._cache(), architecture, graph, profile=profile
+                    )
+
+                self.assertEqual(
+                    evaluation.results[1].movement.method, selected_method
+                )
+                self.assertEqual(
+                    simulate.call_args_list[0].kwargs["output_to_dram"], uses_dram
+                )
+                self.assertEqual(
+                    simulate.call_args_list[1].kwargs["activation_from_dram"],
+                    uses_dram,
+                )
 
     def test_first_gemm_output_does_not_write_dram_before_relu(self):
         cache = self._cache()

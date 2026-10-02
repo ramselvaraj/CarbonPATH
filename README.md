@@ -277,19 +277,19 @@ and `compare-memory` are not supported for ATLAS graphs. See
 #### Anneal a modular ATLAS design point
 
 `main.py` can run simulated annealing over the modular evaluator instead of the
-legacy GEMM path. The search mutates both the architecture (one SA endpoint, one
-FPGA endpoint, package, transfer model) and the evaluation profile (evaluators,
-placement, movement, transfer), while the ATLAS graph stays fixed. Each candidate
-is scored by a replaceable, uncalibrated objective selected in
+legacy GEMM path. The search supports one through six SA endpoints, an optional
+FPGA endpoint, package topology, transfer-model, GEMM-mapping, and evaluation-
+profile changes while the ATLAS graph stays fixed. Each candidate is scored by
+a replaceable objective selected in
 `cfg/parameters/atlas_objective.json`; the default is a weighted sum of raw
-latency and energy. Swap the objective model to change scoring without touching
-`sim_annealing`.
+latency and energy. The modular path uses a domain-independent annealing loop;
+hardware proposal and evaluation logic are injected into it.
 
 ```bash
 .venv/bin/python -m main --run_mode run_sim_anneal \
   --atlas_graph cfg/examples/atlas/dense_relu_funnel.graph_dump.json \
   --architecture_file cfg/examples/sa_fpga_architecture.json \
-  --evaluation_profile cfg/profiles/legacy_sa_fpga_v1.json \
+  --evaluation_profile cfg/profiles/atlas_modular_v1.json \
   --atlas_search_space cfg/experiments/atlas_modular_search_space.json \
   --initial_temp 40 --freezing_temp 5e-4 \
   --max_move_per_temp_step 5 --cooling_rate 0.3

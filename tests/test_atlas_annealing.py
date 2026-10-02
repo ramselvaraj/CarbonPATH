@@ -161,6 +161,66 @@ class AtlasAnnealingTests(unittest.TestCase):
              "ph_pessimistic_transfer_v1"},
         )
 
+    def test_sequential_gemm_entry_uses_the_modular_annealer(self):
+        workload = {
+            "name": "two_gemm",
+            "gemms": [
+                {"name": "first", "shape": (8, 16, 32)},
+                {"name": "second", "shape": (8, 32, 4)},
+            ],
+        }
+        expected = (1.0, self.architecture, pd.DataFrame(), pd.DataFrame())
+        calibration = {
+            "avg_energy": 1.0,
+            "avg_area": 1.0,
+            "avg_dollar_cost": 1.0,
+            "avg_latency": 1.0,
+            "avg_embCarbon": 1.0,
+            "avg_opeCarbon": 1.0,
+        }
+        for metric in ("energy", "area", "cost", "latency", "embCarbon", "opeCarbon"):
+            calibration.update(
+                {
+                    f"{metric}_min": 1.0,
+                    f"{metric}_max": 2.0,
+                    f"{metric}_mean": 1.5,
+                    f"{metric}_stddev": 0.5,
+                    f"{metric}_median": 1.5,
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "cache.csv"
+            pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_file, index=False)
+            with (
+                patch("main.get_modular_calib_cost_avg", return_value=calibration) as calibrate,
+                patch("main.get_calib_cost_avg", side_effect=AssertionError("old calibration")),
+                patch("main._run_modular_annealing", return_value=expected) as modular,
+            ):
+                result = main.sim_annealing(
+                    wl_idx=7,
+                    workload_sequence=workload,
+                    cache_file=str(cache_file),
+                    run_name=str(Path(directory) / "sim"),
+                    cost_profile="t1",
+                    initial_temp=2.0,
+                    freezing_temp=1e-3,
+                    max_move_per_temp_step=1,
+                    cooling_rate=0.5,
+                    calibration_iterations=2,
+                    initial_architecture=self.architecture,
+                )
+
+        self.assertIs(result, expected)
+        calibrate.assert_called_once()
+        call = modular.call_args.kwargs
+        self.assertEqual(
+            [operation.gemm_shape for operation in call["graph"].operations],
+            [(8, 16, 32), (8, 32, 4)],
+        )
+        self.assertEqual(call["profile"].movement_policy, "direct_forward_v1")
+        self.assertEqual(call["search_space"]["max_sa_chiplets"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()

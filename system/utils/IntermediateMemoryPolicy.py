@@ -51,6 +51,37 @@ class BoundaryPlan:
     def uses_dram(self):
         return self.dram_spilled_bytes > 0
 
+    @property
+    def method(self):
+        return self.selected_method
+
+    @property
+    def charged_latency_ns(self):
+        """Latency added beyond the producer/consumer GEMM evaluations.
+
+        DRAM spill/read cost is already represented by the GEMM access flags.
+        Direct forwarding is the only original boundary behavior whose route
+        cost must be added separately.
+        """
+        return self.latency_ns if self.selected_method == "direct_forward" else 0.0
+
+    @property
+    def charged_energy_pj(self):
+        """Energy added beyond the producer/consumer GEMM evaluations."""
+        return self.energy_pj if self.selected_method == "direct_forward" else 0.0
+
+    @property
+    def byte_count(self):
+        return self.intermediate_bytes
+
+    @property
+    def source_endpoint(self):
+        return self.producer_cores[0] if len(self.producer_cores) == 1 else self.producer_cores
+
+    @property
+    def destination_endpoint(self):
+        return self.consumer_cores[0] if len(self.consumer_cores) == 1 else self.consumer_cores
+
 
 @dataclass(frozen=True)
 class BoundaryMapping:

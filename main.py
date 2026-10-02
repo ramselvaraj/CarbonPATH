@@ -13,15 +13,11 @@ import sys
 import math
 import statistics
 import types
+from pathlib import Path
 
 from chiplet.n_utils import get_area_power, read_json_input_params, calculate_system_metrics, write_solution_to_json, \
                             calculate_system_normalized_metrics,\
-                            mutate_wl_mapping, mutate_arch_tech_node,\
-                            mutate_arch_chiplet_size, mutate_arch_mem_pkg,\
-                            mutate_arch_inter_pkg, mutate_arch_chiplet_num,\
-                            mutate_arch_chiplet_size_cg_mode, \
-                            mutate_arch_sram_buf, mutate_arch_protocol,\
-                            accept_move_func, dump_results, calculate_memory_bandwidth,\
+                            dump_results, calculate_memory_bandwidth,\
                             find_run_time, process_iteration_wide, process_arch_details_dump, \
                             flatten_dict, find_config_diff, get_sram_area_energy, recursive_split_updated, \
                             calc_HI_dimension, find_connections, update_inter_pkg_connections, opC_from_pj, total_opC,\
@@ -39,7 +35,7 @@ from system.utils.IntermediateMemoryPolicy import (
     plan_boundary,
 )
 from system.utils.ArchitectureIdentity import architecture_fingerprint
-from system.utils.AtlasGraphAdapter import load_atlas_graph
+from system.utils.AtlasGraphAdapter import gemm_sequence_to_atlas_graph, load_atlas_graph
 from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.NonGemmEstimator import (
     FpgaReluEvaluator,
@@ -62,15 +58,19 @@ from system.utils.TransferEstimator import build_transfer_cost_model
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from system.utils.AtlasObjective import (
     AtlasDesignPoint,
+    RawWeightedSumObjective,
     build_atlas_objective,
 )
 from system.utils.AtlasAnnealingMoves import (
     candidate_profile_paths,
     mutate_atlas_design_point,
+    sequential_gemm_search_space,
     validate_atlas_architecture,
 )
+from system.utils.Calibration import summarize_design_points
+from system.utils.GenericAnnealer import anneal
 from system.utils.PlaceholderPolicies import register_placeholder_policies
-from config import print_info, fast_test, latency_en, sram_selection_mode
+from config import calibration_mode, print_info, fast_test, latency_en, sram_selection_mode
 
 
 # Register placeholder movement/transfer policies at import so profile resolution
@@ -198,10 +198,19 @@ def simulate_single_gemm(
         output_to_dram=output_to_dram,
     )
     sram_energy_pj = scheduler._get_sram_energy()
+    modeling = getattr(scheduler, "last_modeling_details", {})
     return {
         "latency_ns": latency_ns,
         "dram_interconnect_energy_pj": energy_pj,
         "sram_energy_pj": sram_energy_pj,
+        "tile_mappings": tuple(collect_tile_mappings(scheduler)),
+        "reduction_latency_ns": modeling.get("reduction_latency_ns", 0.0),
+        "reduction_transfer_latency_ns": modeling.get(
+            "reduction_transfer_latency_ns", 0.0
+        ),
+        "reduction_communication_energy_pj": modeling.get(
+            "reduction_communication_energy_pj", 0.0
+        ),
     }
 
 
@@ -332,11 +341,65 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
     operation_type = "gemm"
     input_adapter_id = "legacy_scale_sim_gemm_input_v1"
 
+    @staticmethod
+    def _configured_architecture(architecture, settings):
+        if not settings:
+            return architecture
+        unknown = sorted(set(settings) - {"dataflow", "split_k", "assignment_order"})
+        if unknown:
+            raise UnsupportedEvaluation(
+                "unsupported GEMM evaluator setting(s): " + ", ".join(unknown)
+            )
+        architecture = copy.deepcopy(architecture)
+        mapping = architecture["WL_mapping"]["mapping"]
+        if "dataflow" in settings:
+            dataflow = settings["dataflow"]
+            if dataflow not in ("ws", "os", "is"):
+                raise UnsupportedEvaluation("GEMM dataflow must be one of: ws, os, is")
+            mapping["dataflow"] = [dataflow]
+        if "split_k" in settings:
+            split_k = settings["split_k"]
+            if not isinstance(split_k, bool):
+                raise UnsupportedEvaluation("GEMM split_k must be boolean")
+            mapping["if_splitting_k"] = int(split_k)
+        if "assignment_order" in settings:
+            assignment_order = settings["assignment_order"]
+            if assignment_order not in ("ascending", "descending"):
+                raise UnsupportedEvaluation(
+                    "GEMM assignment_order must be ascending or descending"
+                )
+            mapping["assign_workload_in_ascending_order"] = int(
+                assignment_order == "ascending"
+            )
+        return architecture
+
+    def prepare(self, evaluator_input, placement, context):
+        if placement.endpoint_ids != context.system.sa_endpoint_group.endpoint_ids:
+            raise UnsupportedEvaluation(
+                "the CarbonPATH GEMM evaluator requires placement on the complete SA group"
+            )
+        architecture = self._configured_architecture(
+            context.architecture, context.evaluator_settings
+        )
+        return prepare_single_gemm(
+            context.cache,
+            architecture,
+            (evaluator_input.m, evaluator_input.k, evaluator_input.n),
+        )
+
     def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
+        if placement.endpoint_ids != context.system.sa_endpoint_group.endpoint_ids:
+            raise UnsupportedEvaluation(
+                "the CarbonPATH GEMM evaluator requires placement on the complete SA group"
+            )
+        architecture = self._configured_architecture(
+            context.architecture, context.evaluator_settings
+        )
         result = simulate_single_gemm(
             context.cache,
-            context.architecture,
+            architecture,
             (evaluator_input.m, evaluator_input.k, evaluator_input.n),
+            prepared=context.prepared_operation,
             activation_from_dram=evaluator_input.activation_from_dram,
             output_to_dram=evaluator_input.output_to_dram,
         )
@@ -348,6 +411,11 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
             evaluator_id=self.evaluator_id,
             compute_latency_ns=result["latency_ns"],
             dynamic_energy_pj=dynamic_energy_pj,
+            tile_mappings=tuple(result.get("tile_mappings", ())),
+            reduction_latency_ns=result.get("reduction_latency_ns", 0.0),
+            reduction_communication_energy_pj=result.get(
+                "reduction_communication_energy_pj", 0.0
+            ),
         )
 
 
@@ -386,7 +454,7 @@ class AtlasOperationResult:
     index: int
     operation_id: str
     operation_type: str
-    endpoint_id: int
+    endpoint_ids: tuple
     endpoint_kind: str
     evaluator_id: str
     m: object
@@ -396,6 +464,13 @@ class AtlasOperationResult:
     compute_latency_ns: float
     compute_energy_pj: float
     movement: object
+    tile_mappings: tuple = ()
+    reduction_latency_ns: float = 0.0
+    reduction_communication_energy_pj: float = 0.0
+
+    @property
+    def endpoint_id(self):
+        return self.endpoint_ids[0] if len(self.endpoint_ids) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -411,7 +486,7 @@ class AtlasEvaluation:
         for result in self.results:
             total += result.compute_latency_ns
             if result.movement is not None:
-                total += result.movement.latency_ns
+                total += result.movement.charged_latency_ns
         return total
 
     @property
@@ -421,7 +496,7 @@ class AtlasEvaluation:
     @property
     def movement_energy_pj(self):
         return sum(
-            result.movement.energy_pj
+            result.movement.charged_energy_pj
             for result in self.results
             if result.movement is not None
         )
@@ -462,23 +537,9 @@ def evaluate_atlas_graph(
     registry = registry or build_default_evaluator_registry()
 
     operations = graph.operations
-    results = []
-    residency = None
-
+    planned = []
     for index, operation in enumerate(operations):
         placement = placement_policy.endpoint_for(operation.operation_type)
-
-        movement = None
-        if residency is not None:
-            movement = movement_service.move(
-                tensor_id=residency.tensor_id,
-                element_count=residency.element_count,
-                source_endpoint=residency.endpoint_id,
-                destination_endpoint=placement.endpoint_id,
-                system=system,
-                transfer_model=transfer_model,
-            )
-
         access_plan = TensorAccessPlan(
             activation_from_dram=(index == 0),
             output_to_dram=(index == len(operations) - 1),
@@ -488,10 +549,76 @@ def evaluate_atlas_graph(
             cache=cache,
             architecture=arch_dict,
             system=system,
+            evaluator_settings=profile.evaluator_settings_for(
+                operation.operation_type
+            ),
             activation_from_dram=access_plan.activation_from_dram,
             output_to_dram=access_plan.output_to_dram,
         )
-        estimate = binding.estimate(operation, access_plan, placement, context)
+        prepared = None
+        if getattr(movement_service, "requires_prepared_operations", False):
+            prepared = binding.prepare(operation, access_plan, placement, context)
+        planned.append(
+            {
+                "operation": operation,
+                "placement": placement,
+                "binding": binding,
+                "context": context,
+                "prepared": prepared,
+            }
+        )
+
+    mapped_movements = [None] * len(planned)
+    if getattr(movement_service, "requires_prepared_operations", False):
+        for index in range(1, len(planned)):
+            producer = planned[index - 1]
+            consumer = planned[index]
+            mapped_movements[index] = movement_service.move_between(
+                boundary_index=index,
+                producer_operation=producer["operation"],
+                consumer_operation=consumer["operation"],
+                producer_prepared=producer["prepared"],
+                consumer_prepared=consumer["prepared"],
+            )
+
+    results = []
+    residency = None
+
+    for index, item in enumerate(planned):
+        operation = item["operation"]
+        placement = item["placement"]
+
+        movement = mapped_movements[index]
+        if residency is not None and not getattr(
+            movement_service, "requires_prepared_operations", False
+        ):
+            movement = movement_service.move(
+                tensor_id=residency.tensor_id,
+                element_count=residency.element_count,
+                source_endpoint=residency.endpoint_ids,
+                destination_endpoint=placement.endpoint_ids,
+                system=system,
+                transfer_model=transfer_model,
+            )
+
+        incoming_uses_dram = movement is not None and getattr(
+            movement, "uses_dram", False
+        )
+        outgoing = mapped_movements[index + 1] if index + 1 < len(planned) else None
+        outgoing_uses_dram = outgoing is not None and getattr(
+            outgoing, "uses_dram", False
+        )
+        access_plan = TensorAccessPlan(
+            activation_from_dram=(index == 0 or incoming_uses_dram),
+            output_to_dram=(index == len(operations) - 1 or outgoing_uses_dram),
+        )
+        context = item["context"]
+        context.prepared_operation = item["prepared"]
+        context.activation_from_dram = access_plan.activation_from_dram
+        context.output_to_dram = access_plan.output_to_dram
+        estimate = item["binding"].estimate(
+            operation, access_plan, placement, context
+        )
 
         shape = operation.gemm_shape if operation.operation_type == "gemm" else None
         results.append(
@@ -499,7 +626,7 @@ def evaluate_atlas_graph(
                 index=index + 1,
                 operation_id=operation.operation_id,
                 operation_type=operation.operation_type,
-                endpoint_id=placement.endpoint_id,
+                endpoint_ids=placement.endpoint_ids,
                 endpoint_kind=placement.endpoint_kind,
                 evaluator_id=estimate.evaluator_id,
                 m=shape[0] if shape else None,
@@ -509,11 +636,16 @@ def evaluate_atlas_graph(
                 compute_latency_ns=estimate.compute_latency_ns,
                 compute_energy_pj=estimate.dynamic_energy_pj,
                 movement=movement,
+                tile_mappings=estimate.tile_mappings,
+                reduction_latency_ns=estimate.reduction_latency_ns,
+                reduction_communication_energy_pj=(
+                    estimate.reduction_communication_energy_pj
+                ),
             )
         )
         residency = TensorResidency(
             tensor_id=operation.output_tensor_id,
-            endpoint_id=placement.endpoint_id,
+            endpoint_ids=placement.endpoint_ids,
             endpoint_kind=placement.endpoint_kind,
             element_count=operation.element_count,
         )
@@ -1090,6 +1222,61 @@ def get_calib_cost_avg(
     
     return cost_averages
 
+
+def get_modular_calib_cost_avg(
+    calibration_iterations,
+    config_path,
+    cache,
+    calibration_file_path,
+    workload_sequence,
+    intermediate_policy,
+    graph,
+    profile,
+    registry=None,
+):
+    """Calibrate t1--t4 using the same modular evaluator used by annealing."""
+    if calibration_iterations <= 0:
+        raise ValueError("calibration_iterations must be positive")
+    expected_identity = calibration_identity(
+        config_path, workload_sequence, intermediate_policy
+    )
+    calibration_path = Path(calibration_file_path)
+    if calibration_path.exists():
+        with calibration_path.open(encoding="utf-8") as file:
+            cost_averages = json.load(file)
+        if calibration_is_current(
+            cost_averages, expected_identity, calibration_iterations
+        ):
+            return validate_calibration(cost_averages)
+
+    scoreless_objective = RawWeightedSumObjective({"latency_ns": 0.0})
+    design_points = []
+    for _ in range(calibration_iterations):
+        architecture = gen_initial_arch(
+            config_path=config_path,
+            stack_diff_size=True,
+        )
+        design_point, _ = evaluate_atlas_design_point(
+            cache,
+            architecture,
+            graph,
+            profile,
+            scoreless_objective,
+            registry=registry,
+        )
+        design_points.append(design_point)
+
+    cost_averages = summarize_design_points(
+        design_points,
+        calibration_identity=expected_identity,
+        model_version=CALIBRATION_MODEL_VERSION,
+    )
+    validate_calibration(cost_averages)
+    calibration_path.parent.mkdir(parents=True, exist_ok=True)
+    with calibration_path.open("w", encoding="utf-8") as file:
+        json.dump(cost_averages, file, indent=4)
+    return cost_averages
+
 def run_calibration(
     wl_idx,
     workload_sequence,
@@ -1099,47 +1286,28 @@ def run_calibration(
     calibration_iterations=10000,
     intermediate_policy="direct_forward",
 ):
-    
-    print(f"[STANDALONE_MODE] Standalone framework mode is enabled")
+    print("[STANDALONE_MODE] Standalone framework mode is enabled")
     input_file_path = "cfg/parameters/input.json"
     calibration_file_path = f"cfg/calibration/calibration_{wl_idx}.json"
     print(f"[STANDALONE_MODE] Input file path is {input_file_path}")
     print(f"[STANDALONE_MODE] Calibration file path is {calibration_file_path}")
-
-    
-
-    max_chiplet, sys_array, tech_nodes, sram_buf_sizes, inter_pkg_arch, mem_pkg_arch, protocol_arch = read_json_input_params(input_file_path)
-    # Pack all params needed for regeneration into a dict
-    gen_params = {
-            'max_chiplet': max_chiplet, 'sys_array': sys_array, 'tech_nodes': tech_nodes,
-            'sram_buf_sizes': sram_buf_sizes,'inter_pkg_arch': inter_pkg_arch, 'mem_pkg_arch': mem_pkg_arch,
-            'protocol_arch': protocol_arch, 'stack_diff_size': True
-        }
-    
-    if print_info:
-        print(f"[INFO] Max chiplet is {max_chiplet}")
-        print(f"[INFO] Sys array is {sys_array}")
-        print(f"[INFO] Tech node is {tech_nodes}")
-        print(f"[INFO] SRAM buf sizes is {sram_buf_sizes}")
-        print(f"[INFO] Inter pkg arch is {inter_pkg_arch}")
-        print(f"[INFO] Mem pkg arch is {mem_pkg_arch}")
-    
-    
-
     cache = SimulationCache(cache_file, fast_test=fast_test, simulator_dir=run_name)
-    
-    ########## CALIBRATION ############
-    cost_avg = get_calib_cost_avg(
+    graph = gemm_sequence_to_atlas_graph(workload_sequence)
+    profile = load_evaluation_profile(
+        "cfg/profiles/atlas_modular_v1.json"
+    ).with_movement_policy(f"{intermediate_policy}_v1")
+    cost_avg = get_modular_calib_cost_avg(
         calibration_iterations=calibration_iterations,
         config_path=input_file_path,
         cache=cache,
         calibration_file_path=calibration_file_path,
         workload_sequence=workload_sequence,
         intermediate_policy=intermediate_policy,
+        graph=graph,
+        profile=profile,
     )
-    ###################################
-    print(f"[CALIBRATION] Calibration is completed")
-##########################################
+    print("[CALIBRATION] Calibration is completed")
+    return cost_avg
 
 
 def run_policy_comparison(
@@ -1170,6 +1338,8 @@ def run_policy_comparison(
         )
 
     cache = SimulationCache(cache_file, fast_test=fast_test, simulator_dir=run_name)
+    graph = gemm_sequence_to_atlas_graph(workload_sequence)
+    base_profile = load_evaluation_profile("cfg/profiles/atlas_modular_v1.json")
     rows = []
     for policy in (
         "cold_dram",
@@ -1177,15 +1347,34 @@ def run_policy_comparison(
         "local_sram",
         "direct_forward",
     ):
-        objective, normalized, raw = calculate_cost(
-            profile_name=cost_profile,
-            cost_avgerage=cost_averages,
-            system_dict=architecture,
-            cache=cache,
-            workload_sequence=workload_sequence,
-            intermediate_policy=policy,
+        profile = base_profile.with_movement_policy(f"{policy}_v1")
+        objective_model = build_atlas_objective(
+            objective_id=cost_profile,
+            config={"default": cost_profile},
+            calibration=cost_averages,
+            normalization_mode=calibration_mode,
         )
-        rows.append({"policy": policy, "objective": objective, **normalized, **raw})
+        design_point, objective = evaluate_atlas_design_point(
+            cache,
+            architecture,
+            graph,
+            profile,
+            objective_model,
+        )
+        normalized = {
+            f"norm_{name}": value
+            for name, value in objective_model.normalized_metrics(
+                design_point
+            ).items()
+        }
+        rows.append(
+            {
+                "policy": policy,
+                "objective": objective,
+                **normalized,
+                **design_point.raw_dict(),
+            }
+        )
     cache.dump_cache()
 
     output_name = run_name or f"wl{wl_idx}_{cost_profile}"
@@ -1201,6 +1390,140 @@ def run_policy_comparison(
 
 ##########################################
 ####### Simulated Annealing Function
+
+def _run_modular_annealing(
+    *,
+    cache,
+    architecture,
+    graph,
+    profile,
+    search_space,
+    objective,
+    candidate_profiles,
+    initial_temp,
+    freezing_temp,
+    max_move_per_temp_step,
+    cooling_rate,
+    temperature_controller,
+    level_callback,
+    max_total_moves,
+    registry,
+):
+    """Adapt an ATLAS design point to the domain-independent annealer."""
+    proposals = []
+
+    def identity(design):
+        design_architecture, design_profile = design
+        return (
+            architecture_fingerprint(design_architecture),
+            design_profile.fingerprint(),
+        )
+
+    def propose(design, rng):
+        current_architecture, current_profile = design
+        try:
+            moved_architecture, moved_profile, move = mutate_atlas_design_point(
+                current_architecture,
+                current_profile,
+                search_space,
+                candidate_profiles,
+                rng=rng,
+            )
+        except UnsupportedEvaluation:
+            proposals.append(None)
+            raise
+        candidate = (moved_architecture, moved_profile)
+        proposals.append(candidate)
+        return candidate, move
+
+    def evaluate(design):
+        design_architecture, design_profile = design
+        return evaluate_atlas_design_point(
+            cache,
+            design_architecture,
+            graph,
+            design_profile,
+            objective,
+            registry=registry,
+        )
+
+    result = anneal(
+        initial_design=(architecture, profile),
+        propose=propose,
+        evaluate=evaluate,
+        identity=identity,
+        rng=random,
+        initial_temperature=initial_temp,
+        freezing_temperature=freezing_temp,
+        moves_per_temperature=max_move_per_temp_step,
+        cooling_rate=cooling_rate,
+        temperature_controller=temperature_controller,
+        level_callback=level_callback,
+        max_total_moves=max_total_moves,
+    )
+
+    reason_codes = {"improvement": 1, "metropolis": 2, "rejected": 3}
+    trace_rows = []
+    architecture_rows = []
+    for generic_row, candidate in zip(result.trace, proposals):
+        evaluation = generic_row.get("candidate_evaluation")
+        candidate_profile = candidate[1] if candidate is not None else None
+        candidate_architecture = candidate[0] if candidate is not None else None
+        row = {
+            "temperature": generic_row["temperature"],
+            "inner_iter": generic_row["inner_iter"],
+            "1L_move": 1,
+            "2L_move": generic_row.get("move_name"),
+            "SA_run_loop": generic_row["attempt"],
+            "best_cost": generic_row["best_cost_after"],
+            "new_cost": generic_row.get("candidate_cost"),
+            "cost_diff": generic_row.get("cost_diff"),
+            "move_accepted": generic_row["move_accepted"],
+            "move_type": reason_codes.get(generic_row["acceptance_reason"]),
+            "proposal_valid": generic_row["proposal_valid"],
+            "proposal_changed": generic_row["proposal_changed"],
+            "current_cost_before": generic_row["current_cost_before"],
+            "current_cost_after": generic_row["current_cost_after"],
+            "best_cost_before": generic_row["best_cost_before"],
+            "best_cost_after": generic_row["best_cost_after"],
+            "candidate_fingerprint": (
+                architecture_fingerprint(candidate_architecture)
+                if candidate_architecture is not None
+                else None
+            ),
+        }
+        if evaluation is not None:
+            row.update(
+                {
+                    "atlas_objective": generic_row["candidate_cost"],
+                    "profile_name": candidate_profile.name,
+                    "profile_fingerprint": candidate_profile.fingerprint(),
+                }
+            )
+            row.update(evaluation.raw_dict())
+        trace_rows.append(row)
+        architecture_rows.append(
+            process_iteration_wide(
+                candidate_architecture,
+                iteration_id=generic_row["attempt"],
+            )
+        )
+
+    cache.dump_cache()
+    trace = pd.DataFrame(trace_rows)
+    best_architecture, best_profile = result.best_design
+    trace.attrs["atlas"] = True
+    trace.attrs["best_profile"] = best_profile.canonical_dict()
+    trace.attrs["best_profile_fingerprint"] = best_profile.fingerprint()
+    trace.attrs["candidate_profiles"] = tuple(
+        candidate.name for candidate in candidate_profiles
+    )
+    return (
+        result.best_cost,
+        best_architecture,
+        trace,
+        process_arch_details_dump(all_rows_data=architecture_rows),
+    )
 
 def sim_annealing(
     wl_idx,
@@ -1241,8 +1564,8 @@ def sim_annealing(
     ):
         raise ValueError("adaptive annealing requires a positive move budget")
 
-    atlas_mode = atlas_graph is not None
-    if atlas_mode:
+    graph_was_supplied = atlas_graph is not None
+    if graph_was_supplied:
         if workload_sequence is not None:
             raise ValueError(
                 "atlas annealing takes an atlas_graph, not a workload_sequence"
@@ -1259,8 +1582,22 @@ def sim_annealing(
         if not candidate_profiles:
             raise ValueError("atlas annealing requires candidate profiles")
         validate_atlas_architecture(initial_architecture)
-    elif workload_sequence is None:
-        raise ValueError("a workload sequence is required for legacy annealing")
+    else:
+        if workload_sequence is None:
+            raise ValueError("annealing requires an ATLAS graph or GEMM workload sequence")
+        atlas_graph = gemm_sequence_to_atlas_graph(workload_sequence)
+        atlas_profile = atlas_profile or load_evaluation_profile(
+            "cfg/profiles/atlas_modular_v1.json"
+        )
+        atlas_profile = atlas_profile.with_movement_policy(
+            f"{intermediate_policy}_v1"
+        )
+        with open(input_file_path, encoding="utf-8") as file:
+            input_parameters = json.load(file)
+        atlas_search_space = atlas_search_space or sequential_gemm_search_space(
+            input_parameters
+        )
+        candidate_profiles = tuple(candidate_profiles or (atlas_profile,))
 
     if random_seed is not None:
         random.seed(random_seed)
@@ -1272,361 +1609,52 @@ def sim_annealing(
     print(f"[STANDALONE_MODE] Input file path is {input_file_path}")
     print(f"[STANDALONE_MODE] Calibration file path is {calibration_file_path}")
 
-    gen_params = None
-    if not atlas_mode:
-        max_chiplet, sys_array, tech_nodes, sram_buf_sizes, inter_pkg_arch, mem_pkg_arch, protocol_arch = read_json_input_params(input_file_path)
-        # Pack all params needed for regeneration into a dict
-        gen_params = {
-                'max_chiplet': max_chiplet, 'sys_array': sys_array, 'tech_nodes': tech_nodes,
-                'sram_buf_sizes': sram_buf_sizes,'inter_pkg_arch': inter_pkg_arch, 'mem_pkg_arch': mem_pkg_arch,
-                'protocol_arch': protocol_arch, 'stack_diff_size': True
-            }
-        
-        if print_info:
-            print(f"[INFO] Max chiplet is {max_chiplet}")
-            print(f"[INFO] Sys array is {sys_array}")
-            print(f"[INFO] Tech node is {tech_nodes}")
-            print(f"[INFO] SRAM buf sizes is {sram_buf_sizes}")
-            print(f"[INFO] Inter pkg arch is {inter_pkg_arch}")
-            print(f"[INFO] Mem pkg arch is {mem_pkg_arch}")
-
     cache = SimulationCache(cache_file, fast_test=fast_test, simulator_dir=run_name)
 
-    if not atlas_mode:
-        ########## CALIBRATION ############
-        cost_avg = get_calib_cost_avg(
+    if not graph_was_supplied:
+        cost_avg = get_modular_calib_cost_avg(
             calibration_iterations=calibration_iterations,
             config_path=input_file_path,
             cache=cache,
             calibration_file_path=calibration_file_path,
             workload_sequence=workload_sequence,
             intermediate_policy=intermediate_policy,
-        )
-        ###################################
-    else:
-        cost_avg = None
-
-    # Calibration may be loaded or generated. Reset here so that cache state does
-    # not alter seeded initial generation or the annealing trajectory.
-    if random_seed is not None:
-        random.seed(random_seed)
-    
-    
-    # Use the new top-level function to generate the architecture
-    if atlas_mode:
-        cur_architecture = copy.deepcopy(initial_architecture)
-        cur_profile = atlas_profile
-    else:
-        cur_architecture = (
-            copy.deepcopy(initial_architecture)
-            if initial_architecture is not None
-            else gen_initial_arch(config_path=input_file_path, stack_diff_size=True)
-        )
-        cur_profile = None
-    
-    if cur_architecture:
-        print(f"[INFO] Initial architecture json written at cfg/gen_arch directory") if print_info else None
-    else:
-        print(f"[ERROR] Could not generate initial solution")
-        
-    
-    print("\n[INFO] --- Working on calculating cost ---") if print_info else None
-    
-    if atlas_mode:
-        cur_design_point, cost_val = evaluate_atlas_design_point(
-            cache,
-            cur_architecture,
-            atlas_graph,
-            cur_profile,
-            atlas_objective,
+            graph=atlas_graph,
+            profile=atlas_profile,
             registry=registry,
         )
-        norm_cost_dict = {
-            "atlas_objective": cost_val,
-            "profile_name": cur_profile.name,
-            "profile_fingerprint": cur_profile.fingerprint(),
-        }
-        raw_cost_dict = cur_design_point.raw_dict()
-    else:
-        cost_val, norm_cost_dict, raw_cost_dict = calculate_cost(
-            profile_name=cost_profile,
-            cost_avgerage=cost_avg,
-            system_dict=cur_architecture,
-            cache=cache,
-            workload_sequence=workload_sequence,
-            intermediate_policy=intermediate_policy,
-            )
-    
-    #Debug
-    if print_info:
-        print("[INFO] Cost averages is ",json.dumps(cost_avg) if atlas_mode else "")
-        print(f"[INFO] Calculated cost value is {cost_val}")
-        print(f"[INFO] Normalized cost dict is {norm_cost_dict}")
-        print(f"[INFO] Raw cost dict is {raw_cost_dict}")
-    
-    # Track the accepted annealing state separately from the global best.
-    current_cost = cost_val
-    best_cost = cost_val
-    best_architecture = copy.deepcopy(cur_architecture)
-    best_profile = cur_profile
-    
-    temperature = initial_temp
-    
-    #Initialize
-    SA_log_data = []
-    SA_run_loop = 0
-    all_rows_data = []
-    
-    while (
-        SA_run_loop < max_total_moves
-        if temperature_controller is not None
-        else temperature > freezing_temp
-    ):
-        level_rows = []
-        remaining_moves = (
-            max_total_moves - SA_run_loop
-            if temperature_controller is not None
-            else max_move_per_temp_step
+        atlas_objective = atlas_objective or build_atlas_objective(
+            objective_id=cost_profile,
+            config={"default": cost_profile},
+            calibration=cost_avg,
+            normalization_mode=calibration_mode,
         )
-        for iterations in range(min(max_move_per_temp_step, remaining_moves)):
-            print(f" -------------------------------------- ") #if print_info else None
-            print(f"\n[DBG] Current temp is ***** {temperature} ****** and move iteration is ***** {iterations} ******") #if print_info else None
-
-            #Generate random move to either perform WL changes or Architecture changes 
-            SA_first_level_move = random.randint(0,1) # 0 for WL move, and 1 for Architecture move
-            random_arch_move = None #Assigning to None initially, so we can dump csv for WL Moves, otherwise the code cribs
-            new_profile = cur_profile
-            
-            if atlas_mode:
-                SA_first_level_move = 1
-                try:
-                    new_architecture, new_profile, random_arch_move = (
-                        mutate_atlas_design_point(
-                            cur_architecture,
-                            cur_profile,
-                            atlas_search_space,
-                            candidate_profiles,
-                            rng=random,
-                        )
-                    )
-                except UnsupportedEvaluation as error:
-                    print(f"[INFO] Rejected atlas move: {error}") if print_info else None
-                    new_architecture = None
-            elif SA_first_level_move==0: #WL Move
-                print(f"[INFO] 1st Level Move type is WL move") if print_info else None
-                print(f"[INFO] Working on WL Mapping mutation") if print_info else None
-                new_architecture = mutate_wl_mapping(cur_architecture)
-
-            else: #Architecture Move
-                print(f"[INFO] 1st Level Move type is Architecure Move") if print_info else None
-                random_arch_move = random.randint(0,6) #Randomly make an Arch move
-
-                # ** Chiplet Num **
-                if random_arch_move==0:
-                    print("[INFO] 2nd Level Move is - Chiplet Number") if print_info else None
-                    print(f"[INFO] Working on *** Arch Chiplet Number *** mutation") if print_info else None
-                    new_architecture = mutate_arch_chiplet_num(cur_architecture,gen_params)
-                # ** Chiplet Size **
-                if random_arch_move==1:
-                    print("[INFO] 2nd Level Move is - Chiplet Size") if print_info else None
-                    print("[INFO] Working on *** Arch Chiplet Size *** mutation") if print_info else None
-                    new_architecture = mutate_arch_chiplet_size(cur_architecture,all_sys_array_sizes=sys_array,params=gen_params)
-                # ** Chiplet Tech Node **
-                if random_arch_move==2:
-                    print("[INFO] 2nd Level Move is - Chiplet Tech Node") if print_info else None
-                    print(f"[INFO] Working on *** Arch Chiplet Tech Node *** mutation") if print_info else None
-                    new_architecture = mutate_arch_tech_node(cur_architecture,params=gen_params)
-                # ** Mem pkg type **
-                if random_arch_move==3:
-                    print("[INFO] 2nd Level Move is - Mem Type") if print_info else None
-                    print(f"[INFO] Working on *** Arch Mem Pkg *** mutation") if print_info else None
-                    new_architecture = mutate_arch_mem_pkg(cur_architecture,all_mem_pkg_options=mem_pkg_arch)
-                # ** Inter pkg type **
-                if random_arch_move==4:
-                    print("[INFO] 2nd Level Move is - Pkg Type ") if print_info else None
-                    print(f"[INFO] WOkring on *** Arch Inter Pkg *** mutation") if print_info else None
-                    new_architecture = mutate_arch_inter_pkg(cur_architecture,all_inter_pkg_options=inter_pkg_arch, all_protocol_options=protocol_arch)
-                # ** SRAM Buffer Size **
-                if random_arch_move==5:
-                    print("[INFO] 2nd Level Move is - SRAM Buf Size") if print_info else None
-                    print(f"[INFO] Working on *** Arch SRAM Buf Size *** mutation") if print_info else None
-                    new_architecture = mutate_arch_sram_buf(cur_architecture, sram_buf_sizes=sram_buf_sizes)
-                # ** Protocol Arch **
-                if random_arch_move==6:
-                    print("[INFO] 2nd Level Move is - Protocol Arch") if print_info else None
-                    print(f"[INFO] Working on *** Arch Protocol Arch *** mutation") if print_info else None
-                    new_architecture = mutate_arch_protocol(cur_architecture, all_protocol_options=protocol_arch)
-
-            
-            
-            #Write the new arch json to a file 
-            if new_architecture is None:
-                print(f"[ERROR] Could not generate mutated new_arch solution") if print_info else None
-                print(f"[WARNING] Skipping current iteration and moving to next since architecture is NONE") if print_info else None
-                
-                print(f"[INFO] Writing log entry for arch=NONE case ...") if print_info else None
-                SA_run_loop += 1 #Increment loop variable as an iteration attemt was made
-                
-                ####### Dump details #######
-                processed_row = process_iteration_wide(new_architecture, iteration_id=SA_run_loop)
-                all_rows_data.append(processed_row)
-                ############################
-                
-                log_entry = {
-                'temperature': temperature,
-                'inner_iter': iterations,
-                '1L_move': SA_first_level_move,
-                '2L_move': random_arch_move,
-                'SA_run_loop': SA_run_loop,
-                'best_cost': best_cost,
-                'new_cost': None,
-                'cost_diff': None,
-                'move_accepted': None,
-                'move_type': None,
-                'proposal_valid': False,
-                'proposal_changed': False,
-                'current_cost_before': current_cost,
-                'current_cost_after': current_cost,
-                'best_cost_before': best_cost,
-                'best_cost_after': best_cost
-                }
-                log_entry.update({k: None for k in norm_cost_dict}) #Assign all values to be None from norm_cost_dict
-                log_entry.update({k: None for k in raw_cost_dict}) #Assign all values to be None from raw_cost_dict
-                SA_log_data.append(log_entry)
-                level_rows.append(log_entry)
-                continue
-            else:
-            
-                print("\n[INFO] --- Calculating new cost ---") if print_info else None
-                best_cost_before = best_cost
-                current_cost_before = current_cost
-                if atlas_mode:
-                    new_design_point, new_cost_val = evaluate_atlas_design_point(
-                        cache,
-                        new_architecture,
-                        atlas_graph,
-                        new_profile,
-                        atlas_objective,
-                        registry=registry,
-                    )
-                    norm_cost_dict = {
-                        "atlas_objective": new_cost_val,
-                        "profile_name": new_profile.name,
-                        "profile_fingerprint": new_profile.fingerprint(),
-                    }
-                    raw_cost_dict = new_design_point.raw_dict()
-                else:
-                    new_cost_val, norm_cost_dict, raw_cost_dict = calculate_cost(
-                                                        profile_name=cost_profile,
-                                                        cost_avgerage=cost_avg,
-                                                        system_dict=new_architecture,
-                                                        cache=cache,
-                                                        workload_sequence=workload_sequence,
-                                                        intermediate_policy=intermediate_policy,
-                    )
-                print(f"\n[INFO] The new cost is {new_cost_val} and current cost is {current_cost}") if print_info else None
-            
-                #Calcualte the cost delta
-                cost_diff = new_cost_val - current_cost
-                proposal_changed = (
-                    architecture_fingerprint(new_architecture)
-                    != architecture_fingerprint(cur_architecture)
-                )
-                if atlas_mode and new_profile.fingerprint() != cur_profile.fingerprint():
-                    proposal_changed = True
-            
-                #Move accepet check 
-                move_accepted, move_type = accept_move_func(cost_diff=cost_diff, temp=temperature)
-                if move_accepted:
-                    print(f"[INFO] ## Move is accepted ##") if print_info else None
-                    if move_type==1:
-                        print(f"[INFO] ## Move is accepted due to Improvement (cost_diff<0) - move_type {move_type}") if print_info else None
-                    if move_type==2:
-                        print(f"[INFO] ## Move is accepted due to probabilistically - move_type {move_type}") if print_info else None
-                    if move_type==3:
-                        print(f"[INFO] ## Move is rejected") if print_info else None
-                    cur_architecture = new_architecture #Update the current architecture to the new one
-                    if atlas_mode:
-                        cur_profile = new_profile
-                    current_cost = new_cost_val
-                    if new_cost_val < best_cost:
-                        best_architecture = copy.deepcopy(new_architecture)
-                        best_cost = new_cost_val
-                        if atlas_mode:
-                            best_profile = new_profile
-                else:
-                    print(f"[INFO] ## Move is rejected ##") if print_info else None
-                    print(f"[INFO] ## Move type is {move_type}") if print_info else None
-                
-                #### ADD LOG ENTRY ####
-            
-                print(f"[INFO] Writing log entry ...") if print_info else None
-                SA_run_loop += 1 #Increment loop variable as an iteration attemt was made
-                
-                ####### Dump details #######
-                processed_row = process_iteration_wide(new_architecture, iteration_id=SA_run_loop)
-                all_rows_data.append(processed_row)
-                ############################
-                
-                log_entry = {
-                    'temperature': temperature,
-                    'inner_iter': iterations,
-                    '1L_move': SA_first_level_move,
-                    '2L_move': random_arch_move,
-                    'SA_run_loop': SA_run_loop,
-                    'best_cost': best_cost,
-                    'new_cost': new_cost_val,
-                    'cost_diff': cost_diff,
-                    'move_accepted': move_accepted,
-                    'move_type': move_type,
-                    'proposal_valid': True,
-                    'proposal_changed': proposal_changed,
-                    'current_cost_before': current_cost_before,
-                    'current_cost_after': current_cost,
-                    'best_cost_before': best_cost_before,
-                    'best_cost_after': best_cost,
-                    'candidate_fingerprint': architecture_fingerprint(new_architecture)
-                }
-                log_entry.update(norm_cost_dict)
-                log_entry.update(raw_cost_dict)
-                SA_log_data.append(log_entry)
-                level_rows.append(log_entry)
-
-        if temperature_controller is not None:
-            temperature = temperature_controller.next_temperature(
-                level_index=len(temperature_controller.history),
-                temperature=temperature,
-                rows=tuple(level_rows),
-                attempted_moves=SA_run_loop,
-                current_cost=current_cost,
-                best_cost_before=level_rows[0]["best_cost_before"],
-                best_cost_after=best_cost,
+        if random_seed is not None:
+            random.seed(random_seed)
+        if initial_architecture is None:
+            initial_architecture = gen_initial_arch(
+                config_path=input_file_path,
+                stack_diff_size=True,
             )
-            if not math.isfinite(temperature) or temperature <= 0:
-                raise ValueError("adaptive controller returned invalid temperature")
-            if level_callback is not None:
-                level_callback(temperature_controller.history[-1], tuple(level_rows))
-        else:
-            # Cool down temperature.
-            temperature *= cooling_rate
-        
-        result_df = pd.DataFrame(SA_log_data)
-   
+        validate_atlas_architecture(initial_architecture)
 
-    cache.dump_cache()
-
-    sim_data_csv_results = process_arch_details_dump(all_rows_data=all_rows_data)
-    result_df.attrs["atlas"] = atlas_mode
-    if atlas_mode:
-        result_df.attrs["best_profile"] = best_profile.canonical_dict()
-        result_df.attrs["best_profile_fingerprint"] = best_profile.fingerprint()
-        result_df.attrs["candidate_profiles"] = tuple(
-            profile.name for profile in candidate_profiles
-        )
-    return best_cost, best_architecture, result_df, sim_data_csv_results    
-
-##########################################
-
+    return _run_modular_annealing(
+        cache=cache,
+        architecture=initial_architecture,
+        graph=atlas_graph,
+        profile=atlas_profile,
+        search_space=atlas_search_space,
+        objective=atlas_objective,
+        candidate_profiles=candidate_profiles,
+        initial_temp=initial_temp,
+        freezing_temp=freezing_temp,
+        max_move_per_temp_step=max_move_per_temp_step,
+        cooling_rate=cooling_rate,
+        temperature_controller=temperature_controller,
+        level_callback=level_callback,
+        max_total_moves=max_total_moves,
+        registry=registry,
+    )
 
 
 if __name__ == "__main__":

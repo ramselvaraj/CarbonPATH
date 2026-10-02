@@ -111,6 +111,18 @@ def positive_int(value):
     return value
 
 
+def persist_best_profile(trace, run_dir):
+    """Persist the modular half of a complete best design, when present."""
+    profile = trace.attrs.get("best_profile")
+    if not profile:
+        return {"best_profile": None, "best_profile_fingerprint": None}
+    write_json(Path(run_dir) / "best_profile.json", profile)
+    return {
+        "best_profile": profile,
+        "best_profile_fingerprint": trace.attrs.get("best_profile_fingerprint"),
+    }
+
+
 def run_search(
     *,
     label,
@@ -169,6 +181,7 @@ def run_search(
             [decision.as_dict() for decision in temperature_controller.history]
         ).to_csv(run_dir / "temperature_trace.csv", index=False)
     write_json(run_dir / "best_architecture.json", best_architecture)
+    profile_result = persist_best_profile(trace, run_dir)
     simulator_calls = log_path.read_text(encoding="utf-8").count(
         "[INFO] Running simulator"
     )
@@ -185,6 +198,7 @@ def run_search(
         "simulator_calls": simulator_calls,
         "best_architecture": best_architecture,
         "trace": trace,
+        **profile_result,
     }
 
 

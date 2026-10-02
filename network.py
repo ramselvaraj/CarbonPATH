@@ -66,6 +66,7 @@ ATLAS_LAYER_COLUMNS = [
     "operation_type",
     "evaluator_id",
     "endpoint_id",
+    "endpoint_ids",
     "endpoint_kind",
     "M",
     "K",
@@ -75,6 +76,8 @@ ATLAS_LAYER_COLUMNS = [
     "movement_latency_ns",
     "latency_ns",
     "compute_energy_pj",
+    "reduction_latency_ns",
+    "reduction_communication_energy_pj",
     "movement_energy_pj",
     "movement_method",
     "movement_source_endpoint",
@@ -85,8 +88,12 @@ ATLAS_LAYER_COLUMNS = [
 
 def _atlas_operation_row(result, power):
     movement = result.movement
-    movement_latency_ns = movement.latency_ns if movement is not None else 0.0
-    movement_energy_pj = movement.energy_pj if movement is not None else 0.0
+    movement_latency_ns = (
+        movement.charged_latency_ns if movement is not None else 0.0
+    )
+    movement_energy_pj = (
+        movement.charged_energy_pj if movement is not None else 0.0
+    )
     latency_ns = result.compute_latency_ns + movement_latency_ns
     return {
         "layer_index": result.index,
@@ -94,6 +101,7 @@ def _atlas_operation_row(result, power):
         "operation_type": result.operation_type,
         "evaluator_id": result.evaluator_id,
         "endpoint_id": result.endpoint_id,
+        "endpoint_ids": ",".join(map(str, result.endpoint_ids)),
         "endpoint_kind": result.endpoint_kind,
         "M": result.m,
         "K": result.k,
@@ -103,6 +111,10 @@ def _atlas_operation_row(result, power):
         "movement_latency_ns": movement_latency_ns,
         "latency_ns": latency_ns,
         "compute_energy_pj": result.compute_energy_pj,
+        "reduction_latency_ns": result.reduction_latency_ns,
+        "reduction_communication_energy_pj": (
+            result.reduction_communication_energy_pj
+        ),
         "movement_energy_pj": movement_energy_pj,
         "movement_method": movement.method if movement is not None else None,
         "movement_source_endpoint": (
@@ -137,6 +149,17 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
     layer_rows = [
         _atlas_operation_row(result, power) for result in evaluation.results
     ]
+    mapping_rows = []
+    for result in evaluation.results:
+        for tile_index, tile in enumerate(result.tile_mappings, start=1):
+            mapping_rows.append(
+                {
+                    "layer_index": result.index,
+                    "layer_name": result.operation_id,
+                    "tile_index": tile_index,
+                    **tile,
+                }
+            )
     operation_counts = {}
     for result in evaluation.results:
         operation_counts[result.operation_type] = (
@@ -179,7 +202,7 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
         summary=summary,
         layers=pd.DataFrame(layer_rows, columns=ATLAS_LAYER_COLUMNS),
         boundaries=pd.DataFrame(),
-        mapping=pd.DataFrame(),
+        mapping=pd.DataFrame(mapping_rows),
     )
 
 

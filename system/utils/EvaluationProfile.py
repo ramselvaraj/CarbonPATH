@@ -1,13 +1,13 @@
 """Evaluation profile: the named selection of models for one evaluation.
 
 A profile names operation evaluators, a placement policy, a tensor movement
-policy, and a transfer cost model. It carries names and versions only; hardware
-values live in the architecture and evaluator-specific characterization is
-configured elsewhere.
+policy, and a transfer cost model. An evaluator selection may also carry the
+settings owned by that evaluator. Hardware values remain in the architecture.
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -28,6 +28,17 @@ _REQUIRED_FIELDS = {
 
 
 @dataclass(frozen=True)
+class EvaluatorSelection:
+    evaluator_id: str
+    settings: dict
+
+    def canonical_value(self):
+        if not self.settings:
+            return self.evaluator_id
+        return {"id": self.evaluator_id, "settings": deepcopy(self.settings)}
+
+
+@dataclass(frozen=True)
 class EvaluationProfile:
     name: str
     version: int
@@ -36,9 +47,56 @@ class EvaluationProfile:
     movement_policy: str
     transfer_model: str
 
+    def with_movement_policy(self, movement_policy):
+        """Return the same model selection with a different movement policy."""
+        if not isinstance(movement_policy, str) or not movement_policy:
+            raise UnsupportedEvaluation("evaluation profile movement_policy must be a string")
+        return EvaluationProfile(
+            name=self.name,
+            version=self.version,
+            evaluators=self.evaluators,
+            placement_policy=self.placement_policy,
+            movement_policy=movement_policy,
+            transfer_model=self.transfer_model,
+        )
+
+    def with_evaluator_setting(self, operation_type, setting, value):
+        """Return a profile copy with one evaluator-owned setting replaced."""
+        try:
+            current = self.evaluators[operation_type]
+        except KeyError:
+            raise UnsupportedEvaluation(
+                f"profile '{self.name}' has no evaluator for operation type "
+                f"'{operation_type}'"
+            )
+        evaluators = dict(self.evaluators)
+        settings = deepcopy(current.settings)
+        settings[setting] = deepcopy(value)
+        evaluators[operation_type] = EvaluatorSelection(
+            evaluator_id=current.evaluator_id,
+            settings=settings,
+        )
+        return EvaluationProfile(
+            name=self.name,
+            version=self.version,
+            evaluators=evaluators,
+            placement_policy=self.placement_policy,
+            movement_policy=self.movement_policy,
+            transfer_model=self.transfer_model,
+        )
+
     def evaluator_id_for(self, operation_type):
         try:
-            return self.evaluators[operation_type]
+            return self.evaluators[operation_type].evaluator_id
+        except KeyError:
+            raise UnsupportedEvaluation(
+                f"profile '{self.name}' has no evaluator for operation type "
+                f"'{operation_type}'"
+            )
+
+    def evaluator_settings_for(self, operation_type):
+        try:
+            return deepcopy(self.evaluators[operation_type].settings)
         except KeyError:
             raise UnsupportedEvaluation(
                 f"profile '{self.name}' has no evaluator for operation type "
@@ -49,7 +107,10 @@ class EvaluationProfile:
         return {
             "profile": self.name,
             "version": self.version,
-            "evaluators": dict(sorted(self.evaluators.items())),
+            "evaluators": {
+                operation_type: selection.canonical_value()
+                for operation_type, selection in sorted(self.evaluators.items())
+            },
             "placement_policy": self.placement_policy,
             "movement_policy": self.movement_policy,
             "transfer_model": self.transfer_model,
@@ -79,13 +140,31 @@ def parse_evaluation_profile(entry):
     evaluators = entry.get("evaluators")
     if not isinstance(evaluators, dict) or not evaluators:
         raise UnsupportedEvaluation("evaluation profile must name evaluators")
-    for operation_type, evaluator_id in evaluators.items():
+    parsed_evaluators = {}
+    for operation_type, evaluator_entry in evaluators.items():
         if not isinstance(operation_type, str) or not operation_type:
             raise UnsupportedEvaluation("evaluator operation types must be non-empty")
+        if isinstance(evaluator_entry, str):
+            evaluator_id = evaluator_entry
+            settings = {}
+        elif isinstance(evaluator_entry, dict):
+            evaluator_id = evaluator_entry.get("id")
+            settings = evaluator_entry.get("settings", {})
+            if not isinstance(settings, dict):
+                raise UnsupportedEvaluation(
+                    f"evaluator settings for '{operation_type}' must be an object"
+                )
+        else:
+            evaluator_id = None
+            settings = {}
         if not isinstance(evaluator_id, str) or not evaluator_id:
             raise UnsupportedEvaluation(
-                f"evaluator for '{operation_type}' must be a non-empty string"
+                f"evaluator for '{operation_type}' must name a non-empty id"
             )
+        parsed_evaluators[operation_type] = EvaluatorSelection(
+            evaluator_id=evaluator_id,
+            settings=deepcopy(settings),
+        )
     for field in ("placement_policy", "movement_policy", "transfer_model"):
         value = entry.get(field)
         if not isinstance(value, str) or not value:
@@ -93,7 +172,7 @@ def parse_evaluation_profile(entry):
     return EvaluationProfile(
         name=name,
         version=version,
-        evaluators=dict(evaluators),
+        evaluators=parsed_evaluators,
         placement_policy=entry["placement_policy"],
         movement_policy=entry["movement_policy"],
         transfer_model=entry["transfer_model"],

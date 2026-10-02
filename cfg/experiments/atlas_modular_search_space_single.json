@@ -1,4 +1,24 @@
 {
+  "max_sa_chiplets": 1,
+  "move_weights": {
+    "sa_count": 0.0,
+    "sa_array": 1.0,
+    "sa_tech_node": 1.0,
+    "sa_sram": 1.0,
+    "gemm_dataflow": 1.0,
+    "gemm_split_k": 1.0,
+    "gemm_assignment_order": 1.0,
+    "fpga_clbs": 1.0,
+    "fpga_brams": 1.0,
+    "fpga_dsps": 1.0,
+    "fpga_frequency": 1.0,
+    "fpga_relu": 1.0,
+    "mem_type": 1.0,
+    "interconnect": 1.0,
+    "protocol": 1.0,
+    "transfer_model": 1.0,
+    "profile": 0.0
+  },
   "sys_array": ["64x64", "96x96", "128x128", "192x192"],
   "tech_nodes": ["7", "10", "14"],
   "sram_buf_sizes": {
@@ -37,6 +57,7 @@
     ]
   },
   "pkg": {
+    "inter_pkg_architecture": ["2.5d_emib", "2.5d_rdl"],
     "protocol": ["ucie_std", "ucie_adv", "aib"],
     "mem_pkg_architecture": ["ddr5", "hbm2", "hbm3"]
   },

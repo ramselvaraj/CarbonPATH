@@ -16,11 +16,12 @@ import pandas as pd
 
 from main import (
     WORKLOAD_CONFIGS,
-    calculate_cost,
     calibration_identity,
-    get_calib_cost_avg,
+    evaluate_atlas_design_point,
+    get_modular_calib_cost_avg,
     parse_workload_entry,
 )
+from config import calibration_mode
 from script.run_optimizer_experiments import (
     CURRENT_ANNEALING,
     FULL_SEARCH_SPACE,
@@ -33,6 +34,12 @@ from script.run_optimizer_experiments import (
     write_json,
 )
 from system.utils.SimulationCache import SimulationCache
+from system.utils.AtlasGraphAdapter import gemm_sequence_to_atlas_graph
+from system.utils.AtlasObjective import build_atlas_objective
+from system.utils.EvaluationProfile import (
+    load_evaluation_profile,
+    parse_evaluation_profile,
+)
 
 
 INTERMEDIATE_POLICY = "direct_forward"
@@ -187,13 +194,19 @@ def calibrate_workload(
             "w", encoding="utf-8"
         ) as log:
             with redirect_stdout(log), redirect_stderr(log):
-                get_calib_cost_avg(
+                graph = gemm_sequence_to_atlas_graph(workload)
+                profile = load_evaluation_profile(
+                    "cfg/profiles/atlas_modular_v1.json"
+                ).with_movement_policy(f"{INTERMEDIATE_POLICY}_v1")
+                get_modular_calib_cost_avg(
                     calibration_iterations=samples,
                     config_path=str(FULL_SEARCH_SPACE),
                     cache=cache,
                     calibration_file_path=str(calibration_path),
                     workload_sequence=workload,
                     intermediate_policy=INTERMEDIATE_POLICY,
+                    graph=graph,
+                    profile=profile,
                 )
         cache.dump_cache()
         shutil.copy2(cache.dir, base_cache)
@@ -201,7 +214,7 @@ def calibrate_workload(
 
 
 def evaluate_best_architecture(
-    *, architecture, workload, calibration_path, base_cache, log_path
+    *, architecture, workload, calibration_path, base_cache, log_path, profile=None
 ):
     with tempfile.TemporaryDirectory(
         prefix="carbonpath-convergence-evaluation-"
@@ -212,14 +225,28 @@ def evaluate_best_architecture(
         )
         with Path(log_path).open("w", encoding="utf-8") as log:
             with redirect_stdout(log), redirect_stderr(log):
-                objective, _, raw = calculate_cost(
-                    profile_name="t1",
-                    cost_avgerage=load_json(calibration_path),
-                    system_dict=architecture,
-                    cache=cache,
-                    workload_sequence=workload,
-                    intermediate_policy=INTERMEDIATE_POLICY,
+                graph = gemm_sequence_to_atlas_graph(workload)
+                evaluation_profile = (
+                    parse_evaluation_profile(profile)
+                    if profile is not None
+                    else load_evaluation_profile(
+                        "cfg/profiles/atlas_modular_v1.json"
+                    ).with_movement_policy(f"{INTERMEDIATE_POLICY}_v1")
                 )
+                objective_model = build_atlas_objective(
+                    objective_id="t1",
+                    config={"default": "t1"},
+                    calibration=load_json(calibration_path),
+                    normalization_mode=calibration_mode,
+                )
+                design_point, objective = evaluate_atlas_design_point(
+                    cache,
+                    architecture,
+                    graph,
+                    evaluation_profile,
+                    objective_model,
+                )
+                raw = design_point.raw_dict()
         cache.dump_cache()
         shutil.copy2(cache.dir, base_cache)
     return objective, raw
@@ -284,6 +311,7 @@ def run_one(
         calibration_path=calibration_path,
         base_cache=base_cache,
         log_path=run_dir / "best_evaluation.log",
+        profile=result["best_profile"],
     )
     if not math.isclose(
         evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10

@@ -43,6 +43,8 @@ from system.utils.ArchitectureIdentity import (
     architecture_fingerprint,
     canonical_architecture_fingerprint,
 )
+from system.utils.EvaluationProfile import parse_evaluation_profile
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 SCHEDULE_NAME = "requested_4000_75650"
@@ -54,10 +56,11 @@ SCHEDULE = {
 }
 INTERMEDIATE_POLICY = "direct_forward"
 DEFAULT_WORKLOADS = (7, 9, 10)
-DEFAULT_RUNS = 10
+DEFAULT_RUNS = 20
 INITIAL_SEED_BASE = 12000
 SEARCH_SEED_BASE = 13000
 CALIBRATION_SEED_BASE = 10000
+EVALUATION_PROFILE = Path("cfg/profiles/atlas_modular_v1.json")
 
 
 def atomic_write(path: Path, value) -> None:
@@ -79,6 +82,22 @@ def sha256(path: Path) -> str:
 def value_sha256(value) -> str:
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def require_clean_worktree() -> None:
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.returncode != 0:
+        raise RuntimeError("could not verify git worktree status")
+    if status.stdout.strip():
+        raise RuntimeError(
+            "campaign preparation requires a clean git worktree; commit or "
+            "remove local changes first"
+        )
 
 
 def planned_move_count(schedule=SCHEDULE) -> int:
@@ -152,6 +171,15 @@ def result_is_valid(
                 return False
             if result["git_commit"] != manifest["git_commit"]:
                 return False
+            if manifest.get("evaluation_flow") == "modular":
+                profile_path = run_root / "best_profile.json"
+                if not profile_path.exists():
+                    return False
+                profile = parse_evaluation_profile(load_json(profile_path))
+                if result.get("best_profile_fingerprint") != profile.fingerprint():
+                    return False
+                if result.get("best_profile_sha256") != sha256(profile_path):
+                    return False
             calibration_entry = manifest["calibrations"][str(result["workload_id"])]
             if result["calibration_identity"] != calibration_entry["identity"]:
                 return False
@@ -206,7 +234,14 @@ def result_is_valid(
         if result["initial_fingerprint"] != architecture_fingerprint(initial):
             return False
         return True
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        UnsupportedEvaluation,
+    ):
         return False
 
 
@@ -214,6 +249,7 @@ def manifest_for(output: Path, workloads, runs, calibration_samples, base_cache)
     return {
         "campaign_type": "fixed_sa_baseline",
         "campaign_version": 1,
+        "evaluation_flow": "modular",
         "git_commit": subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
         ).stdout.strip(),
@@ -231,6 +267,8 @@ def manifest_for(output: Path, workloads, runs, calibration_samples, base_cache)
         "intermediate_policy": INTERMEDIATE_POLICY,
         "search_space": str(FULL_SEARCH_SPACE),
         "search_space_sha256": sha256(FULL_SEARCH_SPACE),
+        "evaluation_profile": str(EVALUATION_PROFILE),
+        "evaluation_profile_sha256": sha256(EVALUATION_PROFILE),
         "calibration_model_version": CALIBRATION_MODEL_VERSION,
         "simulation_model_version": SIMULATION_MODEL_VERSION,
         "calibration_samples": calibration_samples,
@@ -248,6 +286,7 @@ def manifest_for(output: Path, workloads, runs, calibration_samples, base_cache)
 
 def prepare(args) -> None:
     output = args.output_root
+    require_clean_worktree()
     if output.exists() and any(output.iterdir()):
         raise RuntimeError("prepare requires a new or empty output directory")
     output.mkdir(parents=True, exist_ok=True)
@@ -278,6 +317,7 @@ def prepare(args) -> None:
 def _worker(args) -> None:
     output = args.output_root
     manifest = load_json(output / "manifest.json")
+    require_clean_worktree()
     workload_id = args.workload
     run = args.run
     root = run_dir(output, workload_id, run)
@@ -288,6 +328,8 @@ def _worker(args) -> None:
         raise RuntimeError("worker seeds do not match the prepared manifest")
     if sha256(FULL_SEARCH_SPACE) != manifest["search_space_sha256"]:
         raise RuntimeError("search space differs from the prepared manifest")
+    if sha256(EVALUATION_PROFILE) != manifest["evaluation_profile_sha256"]:
+        raise RuntimeError("evaluation profile differs from the prepared manifest")
     current_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
     ).stdout.strip()
@@ -343,6 +385,7 @@ def _worker(args) -> None:
         calibration_path=calibration_path,
         base_cache=worker_cache,
         log_path=root / "best_evaluation.log",
+        profile=result["best_profile"],
     )
     if not math.isclose(evaluated_objective, result["best_cost"], rel_tol=1e-10, abs_tol=1e-10):
         raise RuntimeError("independent best-architecture evaluation disagrees with search")
@@ -391,6 +434,7 @@ def _worker(args) -> None:
         "search_seed": args.search_seed,
         "initial_fingerprint": result["initial_fingerprint"],
         "best_fingerprint": result["best_fingerprint"],
+        "best_profile_fingerprint": result["best_profile_fingerprint"],
         "canonical_best_fingerprint": canonical_architecture_fingerprint(best_architecture),
         "best_cost": float(result["best_cost"]),
         "verified_best_cost": float(evaluated_objective),
@@ -421,6 +465,8 @@ def _worker(args) -> None:
         "best_architecture_sha256": sha256(root / "best_architecture.json"),
         "initial_architecture_sha256": sha256(root / "initial_architecture.json"),
     }
+    if result["best_profile"] is not None:
+        row["best_profile_sha256"] = sha256(root / "best_profile.json")
     row.update(
         {
             key: value

@@ -1,0 +1,47 @@
+{
+  "fixture_version": 1,
+  "source": "original CarbonPATH simulate_latency_energy",
+  "architecture_fingerprint": "e11c71cff153",
+  "atlas_graph_fingerprint": "64155b4929e7",
+  "simulation_model_version": 2,
+  "tile_mapping_fingerprint": "28734b0a1e91",
+  "tiles_per_gemm": [64, 16],
+  "policies": {
+    "cold_dram": {
+      "latency_ns": 16486.566872465297,
+      "communication_energy_pj": 116695040.0,
+      "sram_energy_pj": 6220989.97313536,
+      "selected_method": "cold_dram",
+      "retained_bytes": 0,
+      "forwarded_bytes": 0,
+      "dram_spilled_bytes": 65536
+    },
+    "ideal_on_chip": {
+      "latency_ns": 15522.802166582946,
+      "communication_energy_pj": 95723520.0,
+      "sram_energy_pj": 6220989.97313536,
+      "selected_method": "ideal_on_chip",
+      "retained_bytes": 65536,
+      "forwarded_bytes": 0,
+      "dram_spilled_bytes": 0
+    },
+    "local_sram": {
+      "latency_ns": 16486.566872465297,
+      "communication_energy_pj": 116695040.0,
+      "sram_energy_pj": 6220989.97313536,
+      "selected_method": "cold_dram",
+      "retained_bytes": 0,
+      "forwarded_bytes": 0,
+      "dram_spilled_bytes": 65536
+    },
+    "direct_forward": {
+      "latency_ns": 15996.241031272084,
+      "communication_energy_pj": 95789056.0,
+      "sram_energy_pj": 6220989.97313536,
+      "selected_method": "direct_forward",
+      "retained_bytes": 32768,
+      "forwarded_bytes": 32768,
+      "dram_spilled_bytes": 0
+    }
+  }
+}

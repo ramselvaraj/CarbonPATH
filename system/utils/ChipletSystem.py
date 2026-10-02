@@ -5,6 +5,7 @@ Global routing, interconnect info recorded here.
 
 from system.utils.SystolicArray import SystolicArray
 from system.utils.FpgaChiplet import FpgaChiplet
+from system.utils.ArchitectureModel import validate_modular_architecture
 from chiplet.n_utils import d2d_bw_calc, calculate_memory_bandwidth, get_sram_area_energy
 from config import print_info
 
@@ -147,9 +148,10 @@ class ChipletSystem:
             with json_path.open("r", encoding='utf-8') as fp:
                 solution:dict = json.load(fp)
             
+        endpoints = validate_modular_architecture(solution)
         pkg = solution["pkg"]
         self.dram_type = pkg["mem_pkg_conn"]["mem_type"]
-        dram_bw_list = calculate_memory_bandwidth(arch_dict)
+        dram_bw_list = calculate_memory_bandwidth(solution)
         chiplet = {k:v for k, v in solution.items() if k.startswith("Chiplet_")}
         sa_chiplet = {
             k: v for k, v in chiplet.items() if not self._is_fpga_chiplet(v)
@@ -161,6 +163,7 @@ class ChipletSystem:
         self.core_dict = self._core_setup(sa_chiplet, dram_bw_list=dram_bw_list)
         self.fpga_chiplet_dict = self._fpga_setup(fpga_chiplet)
         self.endpoint_dict = {**self.core_dict, **self.fpga_chiplet_dict}
+        self.sa_endpoint_group = endpoints.sa_group
 
         self.interconnect_dict, self.interconnect_type, self.links = self._interconnect_setup(pkg)
 

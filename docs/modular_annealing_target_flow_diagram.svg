@@ -1,0 +1,272 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="7600" viewBox="0 0 2400 7600">
+  <defs>
+    <style>
+      .title { font: 700 56px DejaVu Sans, sans-serif; fill: #17202a; }
+      .subtitle { font: 400 27px DejaVu Sans, sans-serif; fill: #5d6875; }
+      .heading { font: 700 34px DejaVu Sans, sans-serif; fill: #17202a; }
+      .body { font: 400 27px DejaVu Sans, sans-serif; fill: #27313b; }
+      .small { font: 400 24px DejaVu Sans, sans-serif; fill: #27313b; }
+      .label { font: 700 24px DejaVu Sans, sans-serif; }
+      .arrow { stroke: #5d6875; stroke-width: 7; fill: none; marker-end: url(#arrowhead); }
+      .loop { stroke: #6c43a2; stroke-width: 7; fill: none; marker-end: url(#purplehead); }
+      .fixed { fill: #e8f1ff; stroke: #2b66b1; stroke-width: 5; }
+      .choice { fill: #fff1ce; stroke: #9a6100; stroke-width: 5; }
+      .module { fill: #e8f7ef; stroke: #237348; stroke-width: 5; }
+      .swap { fill: #e8f7f7; stroke: #19747a; stroke-width: 5; }
+      .decision { fill: #f2eaff; stroke: #6c43a2; stroke-width: 5; }
+      .output { fill: #fde9e4; stroke: #a83d27; stroke-width: 5; }
+    </style>
+    <marker id="arrowhead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L11 5 L0 10 z" fill="#5d6875"/>
+    </marker>
+    <marker id="purplehead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L11 5 L0 10 z" fill="#6c43a2"/>
+    </marker>
+  </defs>
+
+  <rect width="2400" height="7600" fill="#f6f7f8"/>
+  <text x="1200" y="88" text-anchor="middle" class="title">Target Flow — Unified Modular CarbonPATH</text>
+  <text x="1200" y="138" text-anchor="middle" class="subtitle">All legacy behavior restored as replaceable modules, with ATLAS and FPGA additions retained</text>
+
+  <!-- 1 -->
+  <rect x="180" y="200" width="2040" height="300" rx="28" class="fixed"/>
+  <text x="230" y="260" class="heading">1. INPUT — Keras / HGQ2 network</text>
+  <text x="250" y="315" class="body">
+    <tspan x="250" dy="0">• Defines GEMM, ReLU, Softmax, and other supported operations</tspan>
+    <tspan x="250" dy="42">• Supplies tensor shapes, operation order, dependencies, and quantization facts</tspan>
+    <tspan x="250" dy="42">• Can describe an old-style sequential GEMM workload or a mixed SA/FPGA workload</tspan>
+    <tspan x="250" dy="42">• The network itself is never changed by annealing</tspan>
+  </text>
+  <path d="M1200 500 V565" class="arrow"/>
+
+  <!-- 2 -->
+  <rect x="180" y="590" width="2040" height="310" rx="28" class="module"/>
+  <text x="230" y="650" class="heading">2. ATLAS graph-only conversion</text>
+  <text x="250" y="705" class="body">
+    <tspan x="250" dy="0">• Converts the Keras model into a pre-codegen ATLAS graph</tspan>
+    <tspan x="250" dy="42">• Recognizes operations and preserves tensor shapes and dependencies</tspan>
+    <tspan x="250" dy="42">• Stops before hardware code generation or EDA</tspan>
+    <tspan x="250" dy="42">• Output: versioned ATLAS graph-dump JSON</tspan>
+  </text>
+  <path d="M1200 900 V965" class="arrow"/>
+
+  <!-- 3 -->
+  <rect x="180" y="990" width="2040" height="345" rx="28" class="fixed"/>
+  <text x="230" y="1050" class="heading">3. FIXED WORKLOAD — AtlasGraphAdapter creates ATLAS operations</text>
+  <text x="250" y="1105" class="body">
+    <tspan x="250" dy="0">• Produces immutable GEMM, ReLU, and Softmax operation views</tspan>
+    <tspan x="250" dy="42">• Carries operation dimensions, element counts, tensors, dependencies, and order</tspan>
+    <tspan x="250" dy="42">• Operation input adapters can read model-specific facts from the ATLAS source view</tspan>
+    <tspan x="250" dy="42">• Fixed during optimization: operations, shapes, dependencies, and execution order</tspan>
+    <tspan x="250" dy="42">• A legacy-like Keras network therefore becomes the same sequence of GEMM dimensions</tspan>
+  </text>
+
+  <path d="M1200 1335 V1400" class="arrow"/>
+  <path d="M1200 1400 H410 V1455" class="arrow"/>
+  <path d="M1200 1400 V1455" class="arrow"/>
+  <path d="M1200 1400 H1990 V1455" class="arrow"/>
+
+  <!-- 4A -->
+  <rect x="70" y="1485" width="680" height="785" rx="28" class="choice"/>
+  <text x="110" y="1545" class="heading">4A. Initial architecture</text>
+  <text x="120" y="1600" class="small">
+    <tspan x="120" dy="0" font-weight="700">Systolic arrays</tspan>
+    <tspan x="120" dy="38">• one or more SAs</tspan>
+    <tspan x="120" dy="38">• array size and technology</tspan>
+    <tspan x="120" dy="38">• SRAM, area, and power</tspan>
+    <tspan x="120" dy="52" font-weight="700">Optional FPGA</tspan>
+    <tspan x="120" dy="38">• required only when selected</tspan>
+    <tspan x="150" dy="34">operations need it</tspan>
+    <tspan x="120" dy="38">• resources, frequency, and</tspan>
+    <tspan x="150" dy="34">implementation parameters</tspan>
+    <tspan x="120" dy="52" font-weight="700">Package and memory</tspan>
+    <tspan x="120" dy="38">• 2D / 2.5D / 3D / hybrid</tspan>
+    <tspan x="120" dy="38">• SA↔SA and SA↔FPGA routes</tspan>
+    <tspan x="120" dy="38">• memory type and channels</tspan>
+    <tspan x="120" dy="38">• communication protocol</tspan>
+  </text>
+
+  <!-- 4B -->
+  <rect x="860" y="1485" width="680" height="785" rx="28" class="choice"/>
+  <text x="900" y="1545" class="heading">4B. Evaluation profile</text>
+  <text x="910" y="1600" class="small">
+    <tspan x="910" dy="0" font-weight="700">Selects replaceable modules</tspan>
+    <tspan x="910" dy="45">• operation placement policy</tspan>
+    <tspan x="910" dy="38">• GEMM tile-mapping policy</tspan>
+    <tspan x="910" dy="38">• operation input adapters</tspan>
+    <tspan x="910" dy="38">• operation evaluators</tspan>
+    <tspan x="910" dy="38">• tensor movement policy</tspan>
+    <tspan x="910" dy="38">• transfer cost model</tspan>
+    <tspan x="910" dy="38">• physical models</tspan>
+    <tspan x="910" dy="52" font-weight="700">Legacy-parity profile</tspan>
+    <tspan x="910" dy="38">• all SAs for GEMMs</tspan>
+    <tspan x="910" dy="38">• original tile mapping</tspan>
+    <tspan x="910" dy="38">• SCALE-Sim evaluator</tspan>
+    <tspan x="910" dy="38">• original SRAM / forwarding /</tspan>
+    <tspan x="940" dy="34">DRAM-fallback semantics</tspan>
+  </text>
+
+  <!-- 4C -->
+  <rect x="1650" y="1485" width="680" height="785" rx="28" class="choice"/>
+  <text x="1690" y="1545" class="heading">4C. Search configuration</text>
+  <text x="1700" y="1600" class="small">
+    <tspan x="1700" dy="0" font-weight="700">Design-move catalog</tspan>
+    <tspan x="1700" dy="38">• legacy SA / mapping / package</tspan>
+    <tspan x="1730" dy="34">moves</tspan>
+    <tspan x="1700" dy="38">• new FPGA / transfer / profile</tspan>
+    <tspan x="1730" dy="34">moves</tspan>
+    <tspan x="1700" dy="52" font-weight="700">Objective</tspan>
+    <tspan x="1700" dy="38">• legacy calibrated objective</tspan>
+    <tspan x="1700" dy="38">• raw, latency, energy, carbon,</tspan>
+    <tspan x="1730" dy="34">or future objective</tspan>
+    <tspan x="1700" dy="52" font-weight="700">Search behavior</tspan>
+    <tspan x="1700" dy="38">• acceptance policy</tspan>
+    <tspan x="1700" dy="38">• temperature schedule</tspan>
+    <tspan x="1700" dy="38">• deterministic random source</tspan>
+    <tspan x="1700" dy="38">• stopping condition</tspan>
+  </text>
+
+  <path d="M410 2270 V2330 H1200" class="arrow"/>
+  <path d="M1200 2270 V2360" class="arrow"/>
+  <path d="M1990 2270 V2330 H1200" class="arrow"/>
+
+  <!-- 5 -->
+  <rect x="180" y="2390" width="2040" height="245" rx="28" class="choice"/>
+  <text x="230" y="2450" class="heading">5. Modular design point</text>
+  <text x="250" y="2510" class="body">
+    <tspan x="250" dy="0">One architecture + one evaluation profile, evaluated against the fixed ATLAS graph</tspan>
+    <tspan x="250" dy="46">This is the single object that annealing proposes, scores, accepts, rejects, and records.</tspan>
+  </text>
+  <path d="M1200 2635 V2700" class="arrow"/>
+
+  <!-- 6 -->
+  <rect x="100" y="2725" width="2200" height="1180" rx="34" class="module"/>
+  <text x="150" y="2790" class="heading">6. Modular graph executor — evaluate every ATLAS operation in order</text>
+
+  <rect x="170" y="2840" width="2060" height="190" rx="22" class="swap"/>
+  <text x="215" y="2895" class="heading">6A. Operation placement</text>
+  <text x="235" y="2950" class="small">
+    <tspan x="235" dy="0">• GEMM → selected SA endpoint group (one or many SAs)</tspan>
+    <tspan x="235" dy="36">• ReLU / Softmax → selected FPGA endpoint when the profile requires it</tspan>
+  </text>
+  <path d="M1200 3030 V3080" class="arrow"/>
+
+  <rect x="170" y="3105" width="2060" height="285" rx="22" class="swap"/>
+  <text x="215" y="3160" class="heading">6B. Build the operation execution plan</text>
+  <text x="235" y="3215" class="small">
+    <tspan x="235" dy="0" font-weight="700">For GEMM:</tspan>
+    <tspan x="410" dy="0">tile M/K/N; assign tiles to SAs; select dataflow, split-K, merging, and reduction owner</tspan>
+    <tspan x="235" dy="42" font-weight="700">For FPGA operations:</tspan>
+    <tspan x="500" dy="0">derive the evaluator input from operation facts and FPGA resources</tspan>
+    <tspan x="235" dy="48">The execution plan states exactly which tensor regions each endpoint needs and produces.</tspan>
+  </text>
+  <path d="M1200 3390 V3440" class="arrow"/>
+
+  <rect x="170" y="3465" width="2060" height="210" rx="22" class="swap"/>
+  <text x="215" y="3520" class="heading">6C. Create the tensor movement plan</text>
+  <text x="235" y="3575" class="small">
+    <tspan x="235" dy="0">• Compare existing tensor residency with the consumer execution plan</tspan>
+    <tspan x="235" dy="36">• Retain in SRAM, forward between endpoints, route SA↔FPGA, or spill/fall back to DRAM</tspan>
+    <tspan x="235" dy="36">• Account for every required tensor byte exactly once and check SRAM capacity and routes</tspan>
+  </text>
+  <path d="M1200 3675 V3725" class="arrow"/>
+
+  <rect x="170" y="3750" width="2060" height="105" rx="22" class="swap"/>
+  <text x="215" y="3815" class="heading">6D. Evaluate compute + movement, record result, and update tensor residency</text>
+  <path d="M1200 3905 V3970" class="arrow"/>
+
+  <!-- 7 -->
+  <rect x="180" y="4000" width="2040" height="580" rx="28" class="swap"/>
+  <text x="230" y="4060" class="heading">7. Hot-swappable models used behind the executor interfaces</text>
+  <text x="250" y="4120" class="body">
+    <tspan x="250" dy="0" font-weight="700">GEMM tile mapping:</tspan>
+    <tspan x="580" dy="0">original Scheduler mapping | future communication-aware or learned mapping</tspan>
+    <tspan x="250" dy="48" font-weight="700">GEMM compute:</tspan>
+    <tspan x="520" dy="0">SCALE-Sim | future Timeloop | analytical model | measured model</tspan>
+    <tspan x="250" dy="48" font-weight="700">FPGA compute:</tspan>
+    <tspan x="520" dy="0">ReLU / Softmax evaluators | future characterized or HLS models</tspan>
+    <tspan x="250" dy="48" font-weight="700">Tensor movement:</tspan>
+    <tspan x="565" dy="0">cold DRAM | local SRAM | direct forwarding | routed transfer | future streaming</tspan>
+    <tspan x="250" dy="48" font-weight="700">Transfer cost:</tspan>
+    <tspan x="505" dy="0">current route model | future contention, setup, overlap, or measured models</tspan>
+    <tspan x="250" dy="48" font-weight="700">Physical models:</tspan>
+    <tspan x="535" dy="0">current lookup tables | future measured, McPAT, or technology-projection models</tspan>
+    <tspan x="250" dy="58">Validated low-level engines remain inside adapters; the executor does not depend on their implementation.</tspan>
+  </text>
+  <path d="M1200 4580 V4645" class="arrow"/>
+
+  <!-- 8 -->
+  <rect x="180" y="4675" width="2040" height="430" rx="28" class="module"/>
+  <text x="230" y="4735" class="heading">8. Aggregate raw design-point metrics</text>
+  <text x="250" y="4790" class="body">
+    <tspan x="250" dy="0">• Operation totals: compute latency, movement latency, dynamic compute energy, movement energy</tspan>
+    <tspan x="250" dy="42">• Architecture models: SA/FPGA power, SRAM and logic area, package area, and memory/link properties</tspan>
+    <tspan x="250" dy="42">• Cost models: die, interposer, bonding yield, and memory-package cost</tspan>
+    <tspan x="250" dy="42">• Carbon models: embodied carbon and energy-derived operational carbon</tspan>
+    <tspan x="250" dy="50" font-weight="700">Output: one complete set of raw metrics for the modular design point</tspan>
+  </text>
+  <path d="M1200 5105 V5170" class="arrow"/>
+
+  <!-- 9 -->
+  <rect x="180" y="5200" width="2040" height="320" rx="28" class="choice"/>
+  <text x="230" y="5260" class="heading">9. Selected objective produces one scalar cost</text>
+  <text x="250" y="5315" class="body">
+    <tspan x="250" dy="0">• Legacy-parity choice: calibrate, normalize, scale, and apply t1/t2/t3/t4 coefficients</tspan>
+    <tspan x="250" dy="42">• Other choices: raw weighted sum, latency, energy, carbon, Pareto, or future learned objective</tspan>
+    <tspan x="250" dy="42">• Also returns a metric-contribution breakdown so the score remains explainable</tspan>
+    <tspan x="250" dy="50" font-weight="700">First evaluation initializes current design = best design.</tspan>
+  </text>
+  <path d="M1200 5520 V5585" class="arrow"/>
+
+  <!-- 10 -->
+  <rect x="180" y="5615" width="2040" height="665" rx="28" class="choice"/>
+  <text x="230" y="5675" class="heading">10. Propose one new modular design point</text>
+  <text x="250" y="5730" class="body">
+    <tspan x="250" dy="0" font-weight="700">Restored legacy design moves</tspan>
+    <tspan x="250" dy="42">• SA count  • SA array size  • technology node  • SRAM size</tspan>
+    <tspan x="250" dy="42">• dataflow  • split-K  • assignment order  • tile merging</tspan>
+    <tspan x="250" dy="42">• memory type  • package topology  • communication protocol</tspan>
+    <tspan x="250" dy="56" font-weight="700">Retained modular additions</tspan>
+    <tspan x="250" dy="42">• FPGA resources  • FPGA frequency  • FPGA implementation</tspan>
+    <tspan x="250" dy="42">• transfer-model parameters  • evaluation profile</tspan>
+    <tspan x="250" dy="56">The enabled move catalog depends on the search configuration and graph requirements.</tspan>
+    <tspan x="250" dy="46">A seeded random source makes move selection and acceptance reproducible.</tspan>
+    <tspan x="250" dy="50" font-weight="700">The fixed ATLAS graph is never mutated.</tspan>
+  </text>
+  <path d="M1200 6280 V6345" class="arrow"/>
+
+  <!-- 11 -->
+  <rect x="180" y="6375" width="2040" height="230" rx="28" class="module"/>
+  <text x="230" y="6435" class="heading">11. Evaluate the proposed design through the same modular path</text>
+  <text x="250" y="6490" class="body">
+    <tspan x="250" dy="0">placement → execution plan → tensor movement → operation models → raw metrics → objective</tspan>
+    <tspan x="250" dy="46">Output: proposed cost and cost difference = proposed cost − current cost</tspan>
+  </text>
+  <path d="M1200 6605 V6670" class="arrow"/>
+
+  <!-- 12 -->
+  <rect x="330" y="6700" width="1740" height="285" rx="90" class="decision"/>
+  <text x="1200" y="6760" text-anchor="middle" class="heading">12. Acceptance policy</text>
+  <text x="1200" y="6820" text-anchor="middle" class="body">
+    <tspan x="1200" dy="0">Improvement: accept</tspan>
+    <tspan x="1200" dy="44">Regression: selected policy decides; Metropolis uses exp(−difference / temperature)</tspan>
+    <tspan x="1200" dy="44">Accepted proposal becomes current; a new lowest score also becomes best.</tspan>
+  </text>
+  <path d="M1200 6985 V7050" class="arrow"/>
+
+  <!-- 13 -->
+  <rect x="180" y="7080" width="2040" height="285" rx="28" class="module"/>
+  <text x="230" y="7140" class="heading">13. Record the attempt, update the schedule, and repeat</text>
+  <text x="250" y="7195" class="body">
+    <tspan x="250" dy="0">• Record move, execution plans, metrics, objective, acceptance, current state, and best state</tspan>
+    <tspan x="250" dy="42">• Update fixed or adaptive temperature schedule</tspan>
+    <tspan x="250" dy="42">• Continue until freezing or the configured move budget is exhausted</tspan>
+  </text>
+  <path d="M180 7215 H35 V5940 H150" class="loop"/>
+  <text x="50" y="5890" class="label" fill="#6c43a2">REPEAT</text>
+  <path d="M1200 7365 V7415" class="arrow"/>
+
+  <!-- 14 -->
+  <rect x="180" y="7440" width="2040" height="115" rx="28" class="output"/>
+  <text x="230" y="7512" class="heading">14. OUTPUT — best architecture + best evaluation profile + best cost + full reproducible trace</text>
+</svg>

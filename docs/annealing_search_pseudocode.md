@@ -57,11 +57,11 @@ search(graph, initial_architecture, initial_profile):
     return best, best_cost
 ```
 
-This outer loop is implemented inside `main.sim_annealing`: the ATLAS branch
-replaces `objective(evaluate_atlas(...))` with
-`evaluate_atlas_design_point` plus a replaceable `AtlasObjective`, and
-`mutate(current)` with `mutate_atlas_design_point`. The legacy branch is
-unchanged.
+This outer loop is implemented by `system.utils.GenericAnnealer`. The modular
+ATLAS adapter supplies `mutate_atlas_design_point` as the proposal function and
+`evaluate_atlas_design_point` plus a replaceable `AtlasObjective` as the
+evaluation function. The annealer itself contains no workload or hardware
+branching.
 
 ## The two swap points the search plays with
 
@@ -92,9 +92,10 @@ search
 
 ## Current state
 
-The ATLAS branch is implemented. `sim_annealing` now calls
-`evaluate_atlas_design_point` and `mutate_atlas_design_point` when given an
-`atlas_graph`, and keeps the legacy path when given a `workload_sequence`.
+The modular ATLAS path now uses the generic annealer. `sim_annealing` still
+keeps the old workload-sequence path temporarily; removing that duplicate
+production path happens after the local pointwise and neighborhood parity gates
+and the remote final-result experiment are ready.
 
 The objective is a replaceable model. The default `raw_weighted_sum_v0` is
 uncalibrated and reads coefficients from `cfg/parameters/atlas_objective.json`;
@@ -106,4 +107,3 @@ A placeholder policy catalog supplies deliberately bad movement, transfer, and
 GEMM policies so `script/validate_atlas_policy_scores.py` and
 `tests/test_atlas_annealing.py` can check that a known bad policy produces a bad
 score and is not selected. Those placeholder files are isolated for deletion.
-

@@ -1,0 +1,253 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="6500" viewBox="0 0 2400 6500">
+  <defs>
+    <style>
+      .title { font: 700 58px DejaVu Sans, sans-serif; fill: #17202a; }
+      .subtitle { font: 400 28px DejaVu Sans, sans-serif; fill: #5d6875; }
+      .heading { font: 700 35px DejaVu Sans, sans-serif; fill: #17202a; }
+      .body { font: 400 27px DejaVu Sans, sans-serif; fill: #27313b; }
+      .small { font: 400 24px DejaVu Sans, sans-serif; fill: #27313b; }
+      .label { font: 700 24px DejaVu Sans, sans-serif; }
+      .arrow { stroke: #5d6875; stroke-width: 7; fill: none; marker-end: url(#arrowhead); }
+      .loop { stroke: #6c43a2; stroke-width: 7; fill: none; marker-end: url(#purplehead); }
+      .fixed { fill: #e8f1ff; stroke: #2b66b1; stroke-width: 5; }
+      .tuned { fill: #fff1ce; stroke: #9a6100; stroke-width: 5; }
+      .process { fill: #e8f7ef; stroke: #237348; stroke-width: 5; }
+      .decision { fill: #f2eaff; stroke: #6c43a2; stroke-width: 5; }
+      .output { fill: #fde9e4; stroke: #a83d27; stroke-width: 5; }
+    </style>
+    <marker id="arrowhead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 11 5 L 0 10 z" fill="#5d6875"/>
+    </marker>
+    <marker id="purplehead" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 11 5 L 0 10 z" fill="#6c43a2"/>
+    </marker>
+  </defs>
+
+  <rect width="2400" height="6500" fill="#f6f7f8"/>
+  <text x="1200" y="90" text-anchor="middle" class="title">Keras Network → CarbonPATH Annealing → Best Design</text>
+  <text x="1200" y="140" text-anchor="middle" class="subtitle">Fixed workload in blue · tunable choices in yellow · calculations in green · decisions in purple</text>
+
+  <!-- 1 -->
+  <rect x="180" y="200" width="2040" height="300" rx="28" class="fixed"/>
+  <text x="230" y="260" class="heading">1. INPUT — Keras / HGQ2 network</text>
+  <text x="250" y="315" class="body">
+    <tspan x="250" dy="0">• Defines the ordered neural-network layers and operations</tspan>
+    <tspan x="250" dy="42">• Supplies tensor shapes, GEMM dimensions, activations, and quantization settings</tspan>
+    <tspan x="250" dy="42">• Example: Input → QDense → ReLU → QDense → Softmax</tspan>
+    <tspan x="250" dy="42">• This model is not changed by simulated annealing</tspan>
+  </text>
+
+  <path d="M1200 500 V565" class="arrow"/>
+
+  <!-- 2 -->
+  <rect x="180" y="590" width="2040" height="320" rx="28" class="process"/>
+  <text x="230" y="650" class="heading">2. ATLAS graph-only conversion — outside the annealer</text>
+  <text x="250" y="705" class="body">
+    <tspan x="250" dy="0">• Converts the Keras model into a pre-codegen hls4ml ModelGraph</tspan>
+    <tspan x="250" dy="42">• Recognizes supported operations and preserves shapes, tensors, and dependencies</tspan>
+    <tspan x="250" dy="42">• Stops before hardware code generation or EDA</tspan>
+    <tspan x="250" dy="42">• Output: raw ATLAS graph-dump JSON</tspan>
+  </text>
+
+  <path d="M1200 910 V975" class="arrow"/>
+
+  <!-- 3 -->
+  <rect x="180" y="1000" width="2040" height="350" rx="28" class="fixed"/>
+  <text x="230" y="1060" class="heading">3. FIXED WORKLOAD — CarbonPATH parses the ATLAS graph dump</text>
+  <text x="250" y="1115" class="body">
+    <tspan x="250" dy="0">• Builds ordered GEMM, ReLU, and Softmax operation objects</tspan>
+    <tspan x="250" dy="42">• Keeps operation dimensions, element counts, tensor identities, and dependencies</tspan>
+    <tspan x="250" dy="42">• Determines producer → consumer order used for every evaluation</tspan>
+    <tspan x="250" dy="42">• Fixed for the whole search: layers, operation shapes, dependencies, and order</tspan>
+    <tspan x="250" dy="42">• A different network requires a different graph dump and a new annealing run</tspan>
+  </text>
+
+  <path d="M1200 1350 V1415" class="arrow"/>
+  <path d="M1200 1415 H410 V1470" class="arrow"/>
+  <path d="M1200 1415 V1470" class="arrow"/>
+  <path d="M1200 1415 H1990 V1470" class="arrow"/>
+
+  <!-- 4A -->
+  <rect x="70" y="1500" width="680" height="790" rx="28" class="tuned"/>
+  <text x="110" y="1560" class="heading">4A. Starting architecture</text>
+  <text x="120" y="1615" class="small">
+    <tspan x="120" dy="0" font-weight="700">Systolic array</tspan>
+    <tspan x="120" dy="38">• array size</tspan>
+    <tspan x="120" dy="38">• technology node</tspan>
+    <tspan x="120" dy="38">• SRAM capacity</tspan>
+    <tspan x="120" dy="38">• area and power</tspan>
+    <tspan x="120" dy="52" font-weight="700">FPGA</tspan>
+    <tspan x="120" dy="38">• CLBs, BRAMs, DSPs</tspan>
+    <tspan x="120" dy="38">• clock frequency</tspan>
+    <tspan x="120" dy="38">• ReLU implementation</tspan>
+    <tspan x="120" dy="52" font-weight="700">Package</tspan>
+    <tspan x="120" dy="38">• SA ↔ FPGA routes</tspan>
+    <tspan x="120" dy="38">• DDR5 / HBM2 / HBM3</tspan>
+    <tspan x="120" dy="38">• UCIe / AIB protocol</tspan>
+    <tspan x="120" dy="52" font-weight="700">Numeric transfer parameters</tspan>
+    <tspan x="120" dy="38">• setup latency</tspan>
+    <tspan x="120" dy="38">• per-hop latency</tspan>
+  </text>
+
+  <!-- 4B -->
+  <rect x="860" y="1500" width="680" height="790" rx="28" class="tuned"/>
+  <text x="900" y="1560" class="heading">4B. Starting profile</text>
+  <text x="910" y="1615" class="small">
+    <tspan x="910" dy="0" font-weight="700">Placement policy</tspan>
+    <tspan x="910" dy="38">• chooses SA or FPGA for</tspan>
+    <tspan x="940" dy="34">each operation type</tspan>
+    <tspan x="910" dy="52" font-weight="700">Movement policy</tspan>
+    <tspan x="910" dy="38">• retains tensors locally or</tspan>
+    <tspan x="940" dy="34">moves them across endpoints</tspan>
+    <tspan x="910" dy="52" font-weight="700">Transfer-model implementation</tspan>
+    <tspan x="910" dy="38">• estimates movement latency</tspan>
+    <tspan x="940" dy="34">and movement energy</tspan>
+    <tspan x="910" dy="52" font-weight="700">Operation evaluators</tspan>
+    <tspan x="910" dy="38">• GEMM evaluator</tspan>
+    <tspan x="910" dy="38">• ReLU evaluator</tspan>
+    <tspan x="910" dy="38">• Softmax evaluator</tspan>
+    <tspan x="910" dy="52">A profile move swaps all these</tspan>
+    <tspan x="910" dy="34">named choices together.</tspan>
+  </text>
+
+  <!-- 4C -->
+  <rect x="1650" y="1500" width="680" height="790" rx="28" class="tuned"/>
+  <text x="1690" y="1560" class="heading">4C. Search configuration</text>
+  <text x="1700" y="1615" class="small">
+    <tspan x="1700" dy="0" font-weight="700">Search space</tspan>
+    <tspan x="1700" dy="38">• allowed value for every</tspan>
+    <tspan x="1730" dy="34">architecture knob</tspan>
+    <tspan x="1700" dy="38">• candidate profile files</tspan>
+    <tspan x="1700" dy="52" font-weight="700">Objective configuration</tspan>
+    <tspan x="1700" dy="38">• latency weight</tspan>
+    <tspan x="1700" dy="38">• energy weight</tspan>
+    <tspan x="1700" dy="38">• area and dollar weights</tspan>
+    <tspan x="1700" dy="38">• carbon weights</tspan>
+    <tspan x="1700" dy="52" font-weight="700">Annealing schedule</tspan>
+    <tspan x="1700" dy="38">• initial temperature</tspan>
+    <tspan x="1700" dy="38">• moves per level</tspan>
+    <tspan x="1700" dy="38">• cooling rate</tspan>
+    <tspan x="1700" dy="38">• stopping condition</tspan>
+  </text>
+
+  <path d="M410 2290 V2350 H1200" class="arrow"/>
+  <path d="M1200 2290 V2380" class="arrow"/>
+  <path d="M1990 2290 V2350 H1200" class="arrow"/>
+
+  <!-- 5 -->
+  <rect x="180" y="2410" width="2040" height="590" rx="28" class="process"/>
+  <text x="230" y="2470" class="heading">5. Evaluate the starting design = starting architecture + starting profile</text>
+  <text x="250" y="2525" class="body">
+    <tspan x="250" dy="0" font-weight="700">For each operation in the fixed graph:</tspan>
+    <tspan x="250" dy="42">1. Placement policy assigns the operation to the systolic array or FPGA</tspan>
+    <tspan x="250" dy="42">2. Movement policy checks where the previous output tensor resides</tspan>
+    <tspan x="250" dy="42">3. Transfer model estimates latency/energy if the tensor crosses SA ↔ FPGA</tspan>
+    <tspan x="250" dy="42">4. Selected operation evaluator estimates compute latency and dynamic energy</tspan>
+    <tspan x="250" dy="54" font-weight="700">After all operations:</tspan>
+    <tspan x="250" dy="42">• aggregate latency and energy</tspan>
+    <tspan x="250" dy="42">• calculate power, area, dollar cost, embodied carbon, and operational carbon</tspan>
+    <tspan x="250" dy="42">• objective weights the raw metrics to produce one scalar cost</tspan>
+    <tspan x="250" dy="54" font-weight="700">Initialize: current design = starting design; best design = starting design</tspan>
+  </text>
+
+  <path d="M1200 3000 V3065" class="arrow"/>
+
+  <!-- 6 -->
+  <rect x="180" y="3090" width="2040" height="700" rx="28" class="tuned"/>
+  <text x="230" y="3150" class="heading">6. Create one candidate — copy current, then tune exactly one move category</text>
+  <text x="250" y="3210" class="body">
+    <tspan x="250" dy="0" font-weight="700">Systolic-array moves</tspan>
+    <tspan x="250" dy="42">• array size — selects compatible SRAM; refreshes derived area and modeled logic power</tspan>
+    <tspan x="250" dy="42">• technology node — refreshes derived SA area and modeled logic power</tspan>
+    <tspan x="250" dy="42">• SRAM size — refreshes SA area; current logic-power model remains unchanged</tspan>
+    <tspan x="250" dy="54" font-weight="700">FPGA moves</tspan>
+    <tspan x="250" dy="42">• CLBs  • BRAMs  • DSPs  • frequency  • complete ReLU implementation preset</tspan>
+    <tspan x="250" dy="54" font-weight="700">Package and transfer moves</tspan>
+    <tspan x="250" dy="42">• memory type  • communication protocol  • numeric setup/per-hop transfer parameters</tspan>
+    <tspan x="250" dy="54" font-weight="700">Profile move</tspan>
+    <tspan x="250" dy="42">• replace the complete evaluation profile with another candidate profile</tspan>
+    <tspan x="250" dy="58" font-weight="700">Never tuned here: the ATLAS graph, its operations, shapes, dependencies, or order</tspan>
+  </text>
+
+  <path d="M1200 3790 V3855" class="arrow"/>
+
+  <!-- 7 -->
+  <rect x="180" y="3880" width="2040" height="440" rx="28" class="process"/>
+  <text x="230" y="3940" class="heading">7. Validate and fully evaluate the candidate</text>
+  <text x="250" y="3995" class="body">
+    <tspan x="250" dy="0">• Verify the candidate still contains one systolic-array endpoint and one FPGA endpoint</tspan>
+    <tspan x="250" dy="42">• Re-run the complete graph: placement → movement → transfer → operation evaluation</tspan>
+    <tspan x="250" dy="42">• Recalculate latency, energy, power, area, dollar cost, and carbon metrics</tspan>
+    <tspan x="250" dy="42">• Apply the objective weights to obtain candidate_cost</tspan>
+    <tspan x="250" dy="42">• cost difference = candidate_cost − current_cost; lower cost is better</tspan>
+    <tspan x="250" dy="42">• Invalid candidates are logged, consume an attempt, and never reach acceptance</tspan>
+  </text>
+
+  <path d="M1200 4320 V4385" class="arrow"/>
+
+  <!-- 8 -->
+  <rect x="340" y="4410" width="1720" height="320" rx="90" class="decision"/>
+  <text x="1200" y="4470" text-anchor="middle" class="heading">8. Accept the candidate?</text>
+  <text x="1200" y="4530" text-anchor="middle" class="body">
+    <tspan x="1200" dy="0">If candidate_cost &lt; current_cost: always accept</tspan>
+    <tspan x="1200" dy="46">Otherwise: accept with probability exp(−cost_difference / temperature)</tspan>
+    <tspan x="1200" dy="46">High temperature explores more uphill moves; low temperature rejects them more often</tspan>
+  </text>
+
+  <path d="M900 4730 V4800 H580 V4855" class="arrow"/>
+  <text x="690" y="4785" class="label" fill="#237348">ACCEPT</text>
+  <path d="M1500 4730 V4800 H1820 V4855" class="arrow"/>
+  <text x="1580" y="4785" class="label" fill="#a83d27">REJECT</text>
+
+  <!-- 9A/9B -->
+  <rect x="100" y="4880" width="1040" height="360" rx="28" class="process"/>
+  <text x="150" y="4940" class="heading">9A. Accepted</text>
+  <text x="170" y="4995" class="body">
+    <tspan x="170" dy="0">• Candidate becomes the current design</tspan>
+    <tspan x="170" dy="42">• Next mutation starts from this candidate</tspan>
+    <tspan x="170" dy="42">• An accepted uphill candidate may be worse than best</tspan>
+    <tspan x="170" dy="42">• If candidate_cost &lt; best_cost, also replace:</tspan>
+    <tspan x="210" dy="42">best architecture + best profile + best cost</tspan>
+  </text>
+
+  <rect x="1260" y="4880" width="1040" height="360" rx="28" class="process"/>
+  <text x="1310" y="4940" class="heading">9B. Rejected</text>
+  <text x="1330" y="4995" class="body">
+    <tspan x="1330" dy="0">• Current architecture remains unchanged</tspan>
+    <tspan x="1330" dy="42">• Current profile remains unchanged</tspan>
+    <tspan x="1330" dy="42">• Next mutation starts from the previous current design</tspan>
+    <tspan x="1330" dy="42">• Best design also remains unchanged</tspan>
+  </text>
+
+  <path d="M620 5240 V5315 H1200" class="arrow"/>
+  <path d="M1780 5240 V5315 H1200" class="arrow"/>
+
+  <!-- 10 -->
+  <rect x="180" y="5345" width="2040" height="440" rx="28" class="process"/>
+  <text x="230" y="5405" class="heading">10. Record the attempt and advance the annealing schedule</text>
+  <text x="250" y="5460" class="body">
+    <tspan x="250" dy="0">• Log mutation, metrics, cost difference, acceptance, and current/best before and after</tspan>
+    <tspan x="250" dy="42">• Repeat candidate creation until the configured moves at this temperature are complete</tspan>
+    <tspan x="250" dy="42">• Then reduce temperature by the cooling rate—or let the adaptive controller adjust it</tspan>
+    <tspan x="250" dy="42">• Continue while temperature is above freezing, or until the adaptive move budget is exhausted</tspan>
+    <tspan x="250" dy="52" font-weight="700">Current = where the next search step begins; best = lowest-cost design ever seen</tspan>
+  </text>
+
+  <path d="M180 5555 H35 V3440 H150" class="loop"/>
+  <text x="50" y="3395" class="label" fill="#6c43a2">REPEAT</text>
+  <path d="M1200 5785 V5850" class="arrow"/>
+  <text x="1240" y="5835" class="label" fill="#5d6875">FINISHED</text>
+
+  <!-- 11 -->
+  <rect x="180" y="5880" width="2040" height="470" rx="28" class="output"/>
+  <text x="230" y="5940" class="heading">11. OUTPUT — return the best-ever design, not necessarily the final current design</text>
+  <text x="250" y="5995" class="body">
+    <tspan x="250" dy="0">• best architecture JSON</tspan>
+    <tspan x="250" dy="42">• best evaluation profile JSON</tspan>
+    <tspan x="250" dy="42">• best scalar objective cost</tspan>
+    <tspan x="250" dy="42">• per-move annealing trace CSV</tspan>
+    <tspan x="250" dy="42">• architecture trace CSV</tspan>
+    <tspan x="250" dy="42">• updated simulation cache</tspan>
+    <tspan x="250" dy="54" font-weight="700">These artifacts show what was tuned, why each move was accepted/rejected, and the best result found.</tspan>
+  </text>
+</svg>

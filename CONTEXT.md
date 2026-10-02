@@ -33,8 +33,8 @@ from an operation-specific input view.
 _Avoid_: operation handler, operation branch
 
 **Evaluation profile**:
-The named selection of operation evaluators, placement policy, and tensor
-movement policy used for one evaluation.
+The named selection of operation evaluators, placement policy, tensor movement
+policy, and transfer cost model used for one evaluation.
 _Avoid_: global configuration, estimator mode
 
 **Operation placement**:
@@ -68,10 +68,18 @@ modular executor. It is the unit that modular annealing proposes, scores, and
 accepts or rejects. The ATLAS graph is fixed for the whole search.
 _Avoid_: candidate, configuration
 
+**Final-result equivalence**:
+For an equivalent sequential-GEMM workload and search definition, modular
+annealing returns the same canonical best architecture, numerically equivalent
+raw metrics, and numerically equivalent objective value as original CarbonPATH.
+It does not require both searches to follow the same proposal or acceptance
+trace; equal-scoring architectures are resolved by deterministic tie-breaking.
+_Avoid_: trace equivalence, legacy mode
+
 **ATLAS objective**:
 A replaceable model that turns one modular design point's raw metrics (latency,
-energy, area, cost, carbon) into the single scalar the search minimizes. The
-default is the uncalibrated `raw_weighted_sum_v0`.
+energy, area, cost, carbon) into the single scalar the search minimizes. Its
+configuration may include metric weights, normalization, and calibration data.
 _Avoid_: cost function, calibration
 
 **Candidate profile catalog**:
