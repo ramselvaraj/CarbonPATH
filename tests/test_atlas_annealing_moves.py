@@ -572,6 +572,81 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         self.assertEqual(move, "mem_type")
         self.assertEqual(moved["pkg"]["mem_pkg_conn"]["mem_type"], "ddr5")
 
+    def test_sequential_memory_move_regenerates_hbm_channel_allocation(self):
+        architecture = copy.deepcopy(self.architecture)
+        architecture["Chiplet_2"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"] = {
+            "mem_type": "ddr5",
+            "Chiplet_1": 4,
+            "Chiplet_2": 4,
+        }
+        params = sequential_gemm_search_space(_load("cfg/parameters/input.json"))
+        params["move_weights"] = {"mem_type": 1.0}
+
+        moved, _, move = mutate_atlas_design_point(
+            architecture,
+            self.profiles[0],
+            params,
+            candidate_profiles=(self.profiles[0],),
+            rng=_MoveRng("mem_type", preferred="hbm3"),
+        )
+
+        self.assertEqual(move, "mem_type")
+        self.assertEqual(
+            moved["pkg"]["mem_pkg_conn"],
+            {"mem_type": "hbm3", "Chiplet_1": 8, "Chiplet_2": 8},
+        )
+
+    def test_memory_move_preserves_legacy_area_weighted_channel_distribution(self):
+        architecture = copy.deepcopy(self.architecture)
+        architecture["Chiplet_2"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["Chiplet_1"]["area"] = 9.0
+        architecture["Chiplet_2"]["area"] = 1.0
+        architecture["pkg"]["mem_pkg_conn"] = {
+            "mem_type": "ddr5",
+            "Chiplet_1": 7,
+            "Chiplet_2": 1,
+        }
+        params = sequential_gemm_search_space(_load("cfg/parameters/input.json"))
+        params["move_weights"] = {"mem_type": 1.0}
+
+        moved, _, _ = mutate_atlas_design_point(
+            architecture,
+            self.profiles[0],
+            params,
+            candidate_profiles=(self.profiles[0],),
+            rng=_MoveRng("mem_type", preferred="hbm3"),
+        )
+
+        self.assertEqual(
+            moved["pkg"]["mem_pkg_conn"],
+            {"mem_type": "hbm3", "Chiplet_1": 14, "Chiplet_2": 2},
+        )
+
+    def test_sequential_memory_move_regenerates_ddr_channel_allocation(self):
+        architecture = copy.deepcopy(self.architecture)
+        architecture["Chiplet_2"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"] = {
+            "mem_type": "hbm3",
+            "Chiplet_1": 8,
+            "Chiplet_2": 8,
+        }
+        params = sequential_gemm_search_space(_load("cfg/parameters/input.json"))
+        params["move_weights"] = {"mem_type": 1.0}
+
+        moved, _, _ = mutate_atlas_design_point(
+            architecture,
+            self.profiles[0],
+            params,
+            candidate_profiles=(self.profiles[0],),
+            rng=_MoveRng("mem_type", preferred="ddr5"),
+        )
+
+        self.assertEqual(
+            moved["pkg"]["mem_pkg_conn"],
+            {"mem_type": "ddr5", "Chiplet_1": 4, "Chiplet_2": 4},
+        )
+
     def test_sequential_interconnect_move_preserves_package_topology(self):
         architecture = copy.deepcopy(self.architecture)
         architecture["Chiplet_2"] = copy.deepcopy(architecture["Chiplet_1"])

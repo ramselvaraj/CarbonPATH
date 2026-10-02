@@ -15,6 +15,7 @@ import random
 
 from chiplet.n_utils import get_area_power, get_sram_area_energy
 from system.utils.ArchitectureModel import (
+    regenerate_memory_channels,
     rebuild_package_for_endpoints,
     supported_package_types,
     validate_modular_architecture,
@@ -324,11 +325,14 @@ def mutate_atlas_design_point(
             memory_options = [
                 option for option in memory_options if "ddr" in option.lower()
             ]
-        memory["mem_type"] = _choose_alternative(
+        memory_type = _choose_alternative(
             rng,
             memory_options,
             memory["mem_type"],
             "memory technology",
+        )
+        moved["pkg"]["mem_pkg_conn"] = regenerate_memory_channels(
+            moved, memory_type
         )
     elif move == "interconnect":
         package_options = params.get("pkg", {}).get("inter_pkg_architecture", [])

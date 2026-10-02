@@ -196,17 +196,31 @@ def _memory_channels(architecture, endpoints, memory_type):
     total = max(total, len(sa_keys))
     channels = {key: 1 for key in sa_keys}
     remaining = total - len(sa_keys)
-    ordered = sorted(
-        sa_keys,
-        key=lambda key: (-float(architecture[key].get("area", 0)), _chiplet_id(key)),
-    )
-    for index in range(remaining):
-        channels[ordered[index % len(ordered)]] += 1
+    areas = [float(architecture[key].get("area", 1.0)) for key in sa_keys]
+    total_area = sum(areas)
+    if total_area > 0:
+        proportions = [area / total_area for area in areas]
+        for _ in range(remaining):
+            next_total = sum(channels.values()) + 1
+            errors = [
+                next_total * proportions[index] - channels[key]
+                for index, key in enumerate(sa_keys)
+            ]
+            channels[sa_keys[errors.index(max(errors))]] += 1
+    else:
+        for index in range(remaining):
+            channels[sa_keys[index % len(sa_keys)]] += 1
     return {
         "mem_type": memory_type,
         **channels,
         **{key: 0 for key in endpoints.fpga_keys},
     }
+
+
+def regenerate_memory_channels(architecture, memory_type):
+    """Allocate the fixed DDR/HBM channel total across the current SAs."""
+    endpoints = validate_modular_architecture_membership(architecture)
+    return _memory_channels(architecture, endpoints, memory_type)
 
 
 def _compatible_protocol(connection_type, protocol_options, rng=None):
