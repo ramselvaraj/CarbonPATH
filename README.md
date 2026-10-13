@@ -298,6 +298,13 @@ hardware proposal and evaluation logic are injected into it.
 or `make sim_anneal_atlas`. The best architecture and its evaluation profile are
 written under `cfg/gen_arch/<run>/`.
 
+A ReLU can be fused with the GEMM directly before it, so that it runs on the
+SAs of that GEMM and its tensor does not move. Use the profile
+`cfg/profiles/atlas_fused_relu_v1.json` to put the `relu_fusion` move in the
+search. With `cfg/examples/sa_only_architecture.json`, which has no FPGA, each
+ReLU starts fused. The fused ReLU has no latency, energy, area, or power cost
+now; see `docs/assumed_rates_inventory.md`.
+
 A placeholder policy catalog
 (`cfg/profiles/placeholders/`, `system/utils/PlaceholderPolicies.py`) supplies
 deliberately bad movement, transfer, and GEMM policies so the annealer can be

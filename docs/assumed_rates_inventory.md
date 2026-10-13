@@ -79,6 +79,9 @@ these tables.
 | DRAM energy | DDR4 `30`; DDR5 `20`; HBM2 `5`; HBM3 `3` pJ/bit | `cfg/parameters/energy_eff.json:2-7` | Configured technology-rate table; citation absent |
 | Die-to-die energy | UCIe standard `0.5`; UCIe advanced `0.25`; UCIe 3D `0.005`; AIB `0.25`; BoW `0.75` pJ/bit | `energy_eff.json:8-14` | Configured technology-rate table; citation absent |
 | Cost-profile weights | `t1`: equal energy/performance/area/cost; `t2`, `t3`, `t4` use values `0.1`, `0.2`, `0.6`, `0.7`, `0.8` | `cfg/parameters/cost_profiles.json:2-32` | Decision/objective assumptions |
+| Fused ReLU latency | `0 ns` for each fused ReLU | `cfg/profiles/atlas_fused_relu_v1.json` (`relu@sa` setting `latency_ns`); default in `system/utils/FusedActivation.py` | Placeholder assumption; no hardware characterization |
+| Fused ReLU energy | `0 pJ` for each element | `cfg/profiles/atlas_fused_relu_v1.json` (`relu@sa` setting `energy_per_element_pj`); default in `system/utils/FusedActivation.py` | Placeholder assumption; no hardware characterization |
+| Fused ReLU area and power | `0` added to the SA | Not modeled; `get_area_power` in `chiplet/n_utils.py` is unchanged | Placeholder assumption; fusion has no hardware cost |
 | Calibration sample count | `10` | `network.py:433` | Hardcoded operational assumption |
 | Default cost profile | `t1` | `network.py:408` | Behavioral default, not a physical rate |
 

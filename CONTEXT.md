@@ -68,6 +68,13 @@ call shape, `plan(request)`, and owns the movement rules behind that seam. The
 named movement policy is a code identifier, not a domain decision.
 _Avoid_: boundary policy, movement handler
 
+**Fused activation**:
+A ReLU that runs on the systolic arrays of the GEMM directly before it. It is a
+workload-mapping choice of one GEMM -> ReLU handoff, shown by the movement
+policy `fused_sa_activation_v1`. The tensor does not move, and the GEMM is the
+producer of the handoff that leaves the ReLU.
+_Avoid_: merged operation, SA ReLU
+
 **Movement seam**:
 The single interface between the executor and a movement policy: the executor
 supplies a movement request and receives a movement plan, without inspecting

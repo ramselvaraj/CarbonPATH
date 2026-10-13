@@ -33,6 +33,7 @@ from system.utils.ArchitectureIdentity import (
 )
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from system.utils.WorkloadMapping import (
+    FUSED_ACTIVATION_POLICY,
     GEMM_DATAFLOWS,
     GEMM_TILE_ORDERS,
     movement_policy_options,
@@ -50,6 +51,7 @@ MOVE_TYPES = (
     "gemm_merge_tiles",
     "gemm_sa_set",
     "handoff_movement",
+    "relu_fusion",
     "fpga_count",
     "fpga_clbs",
     "fpga_brams",
@@ -258,6 +260,76 @@ def _mutate_handoff_movement(mapping, params, rng):
     )
 
 
+def _fusion_candidates(mapping, endpoints):
+    """The operations whose fusion can change.
+
+    Each one can be fused. A fused one can go back only to an FPGA.
+    """
+    return [
+        index
+        for index in mapping.fusable_indexes
+        if not mapping.is_fused(index) or endpoints.fpga_ids
+    ]
+
+
+def _handoff_policy(params, handoff_kind, current, default_movement_policy):
+    """The movement policy of a handoff whose kind changed.
+
+    The current policy stays when the search space lists it for the new kind.
+    Otherwise the first listed policy is used, and the default policy when the
+    search space lists none.
+    """
+    options = [
+        option
+        for option in movement_policy_options(params, handoff_kind)
+        if option != FUSED_ACTIVATION_POLICY
+    ]
+    if options:
+        return current if current in options else options[0]
+    if default_movement_policy is None:
+        raise NoAlternative(
+            f"no movement policy is available for a {handoff_kind} handoff"
+        )
+    return default_movement_policy
+
+
+def _mutate_relu_fusion(mapping, endpoints, default_movement_policy, params, rng):
+    """Fuse one ReLU with the GEMM before it, or move a fused one to the FPGA.
+
+    The endpoint of the ReLU and the handoffs on its two sides change in one
+    move, because each of them is invalid without the others.
+    """
+    candidates = _fusion_candidates(mapping, endpoints)
+    if not candidates:
+        raise NoAlternative("no ReLU can change its fusion")
+    index = rng.choice(candidates)
+    last = index == len(mapping.operations) - 1
+    if mapping.is_fused(index):
+        endpoint_kind = "fpga"
+        endpoint_ids = endpoints.fpga_ids
+        incoming_policy = _handoff_policy(
+            params,
+            "sa_to_fpga",
+            mapping.handoffs[index - 1],
+            default_movement_policy,
+        )
+    else:
+        endpoint_kind = "sa"
+        endpoint_ids = mapping.operations[index - 1].endpoint_ids
+        incoming_policy = FUSED_ACTIVATION_POLICY
+    outgoing_policy = None
+    if not last:
+        outgoing_policy = _handoff_policy(
+            params,
+            f"{endpoint_kind}_to_{mapping.operations[index + 1].endpoint_kind}",
+            mapping.handoffs[index],
+            default_movement_policy,
+        )
+    return mapping.with_fusion_change(
+        index, endpoint_kind, endpoint_ids, incoming_policy, outgoing_policy
+    )
+
+
 def _mutate_fpga_count(endpoints, params, rng):
     """Select a different FPGA count from the search space list.
 
@@ -346,12 +418,24 @@ def _mutate_sa_count(architecture, mapping, params, rng):
     return canonicalize_chiplet_labels(rebuilt), moved_mapping
 
 
-def mutate_atlas_design_point(architecture, mapping, params, rng=None):
+def mutate_atlas_design_point(
+    architecture,
+    mapping,
+    params,
+    rng=None,
+    default_movement_policy=None,
+    allow_fusion=False,
+):
     """Return ``(architecture, workload mapping, move_name)`` for one move.
 
     Changes either the architecture or the workload mapping. The endpoint
     invariant is validated before returning; an invalid proposal raises
     :class:`UnsupportedEvaluation` so the caller can record it as invalid.
+
+    ``allow_fusion`` puts the fusion move in the search. It is true when the
+    evaluation profile has an evaluator for a fused ReLU.
+    ``default_movement_policy`` is the movement policy of a handoff kind that
+    the search space does not list.
     """
     rng = rng or random
     candidate_moves = list(MOVE_TYPES)
@@ -366,12 +450,21 @@ def mutate_atlas_design_point(architecture, mapping, params, rng=None):
             if not candidate.startswith("fpga_") or candidate == "fpga_count"
         ]
 
+    if not allow_fusion or not _fusion_candidates(mapping, endpoints):
+        candidate_moves.remove("relu_fusion")
+
     skip = params.get("skip_moves_without_alternative", True)
     while True:
         move = _select_move(rng, candidate_moves, params)
         try:
             moved, moved_mapping = _apply_move(
-                move, architecture, mapping, endpoints, params, rng
+                move,
+                architecture,
+                mapping,
+                endpoints,
+                params,
+                rng,
+                default_movement_policy,
             )
         except NoAlternative:
             if not skip:
@@ -381,7 +474,9 @@ def mutate_atlas_design_point(architecture, mapping, params, rng=None):
         return moved, moved_mapping, move
 
 
-def _apply_move(move, architecture, mapping, endpoints, params, rng):
+def _apply_move(
+    move, architecture, mapping, endpoints, params, rng, default_movement_policy=None
+):
     if move == "sa_count":
         return _mutate_sa_count(architecture, mapping, params, rng)
     if move == "fpga_count":
@@ -390,6 +485,10 @@ def _apply_move(move, architecture, mapping, endpoints, params, rng):
         return architecture, _mutate_gemm_sa_set(mapping, endpoints.sa_ids, rng)
     if move == "handoff_movement":
         return architecture, _mutate_handoff_movement(mapping, params, rng)
+    if move == "relu_fusion":
+        return architecture, _mutate_relu_fusion(
+            mapping, endpoints, default_movement_policy, params, rng
+        )
 
     # Every move below draws the SA first, also the moves that do not use it.
     # This keeps the random sequence of the original annealer.

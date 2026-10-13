@@ -230,6 +230,22 @@ The trace DataFrame returned in ATLAS mode carries
 `cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json`.
 `system/utils/DesignPointFile.py` is the only code that knows its layout.
 
+### Fused ReLU
+
+`system/utils/FusedActivation.py` owns the fused ReLU: the movement policy
+`fused_sa_activation_v1` and the evaluator `sa_fused_relu_v1`.
+
+- The workload mapping puts a fused ReLU on the SAs of the GEMM before it.
+- `evaluate_atlas_graph` makes one unit of the two operations. The GEMM is the
+  producer of the next handoff and gets its `output_to_dram` value.
+- A profile names the evaluator with the key `relu@sa`
+  (`cfg/profiles/atlas_fused_relu_v1.json`). The `relu_fusion` move is in the
+  search only when the profile has this key.
+- An architecture with no FPGA (`cfg/examples/sa_only_architecture.json`)
+  starts with each ReLU fused. Softmax still needs an FPGA.
+- The fused ReLU adds no area and no power to the SA. Its latency and energy
+  are evaluator settings with a default of zero.
+
 Placeholder material for checking the search lives in
 `system/utils/PlaceholderPolicies.py`, `cfg/profiles/placeholders/`, and
 `script/validate_atlas_policy_scores.py`; it is isolated for later deletion.
@@ -284,6 +300,7 @@ Tests are under `tests/` and run through unittest discovery. The main groups are
 - `test_atlas_objective.py`: modular objective scoring and known-bad profile ranking.
 - `test_atlas_annealing_moves.py`: modular mutation and the one-SA/one-FPGA invariant.
 - `test_atlas_annealing.py`: seeded modular annealing selects a good profile.
+- `test_fused_activation.py`: fused ReLU mapping, evaluation, and search move.
 
 ## Current Caveats
 

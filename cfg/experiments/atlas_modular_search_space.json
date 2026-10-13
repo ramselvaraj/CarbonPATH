@@ -11,6 +11,7 @@
     "gemm_merge_tiles": 1.0,
     "gemm_sa_set": 1.0,
     "handoff_movement": 1.0,
+    "relu_fusion": 1.0,
     "fpga_count": 1.0,
     "fpga_clbs": 1.0,
     "fpga_brams": 1.0,

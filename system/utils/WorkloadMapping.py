@@ -23,6 +23,12 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 GEMM_DATAFLOWS = ("ws", "os", "is")
 GEMM_TILE_ORDERS = ("ascending", "descending")
 
+#: The movement policy of a handoff whose consumer is fused with its GEMM.
+FUSED_ACTIVATION_POLICY = "fused_sa_activation_v1"
+#: The operation types that can be fused with the GEMM directly before them.
+FUSABLE_OPERATIONS = ("relu",)
+FUSED_HANDOFF_KIND = "sa_fused"
+
 
 def endpoint_kind_for(operation_type):
     """The endpoint kind that runs one operation type."""
@@ -118,6 +124,61 @@ class WorkloadMapping:
             raise UnsupportedEvaluation(
                 "workload mapping needs one movement policy for each handoff"
             )
+        for index, operation in enumerate(self.operations):
+            fused = self.is_fused(index)
+            if not fused:
+                if not operation.is_gemm and operation.endpoint_kind == "sa":
+                    raise UnsupportedEvaluation(
+                        f"operation '{operation.operation_id}' is on a systolic "
+                        "array but is not fused with a GEMM"
+                    )
+                continue
+            producer = self.operations[index - 1]
+            if (
+                not producer.is_gemm
+                or operation.operation_type not in FUSABLE_OPERATIONS
+            ):
+                raise UnsupportedEvaluation(
+                    f"operation '{operation.operation_id}' cannot be fused with "
+                    f"'{producer.operation_id}'"
+                )
+            if (
+                operation.endpoint_kind != "sa"
+                or operation.endpoint_ids != producer.endpoint_ids
+            ):
+                raise UnsupportedEvaluation(
+                    f"fused operation '{operation.operation_id}' must use the "
+                    f"systolic arrays of '{producer.operation_id}'"
+                )
+
+    def is_fused(self, operation_index):
+        """True when the operation is fused with the GEMM directly before it."""
+        return (
+            operation_index > 0
+            and self.handoffs[operation_index - 1] == FUSED_ACTIVATION_POLICY
+        )
+
+    @property
+    def fusable_indexes(self):
+        """The operations that can be fused: each directly follows a GEMM."""
+        return tuple(
+            index
+            for index, operation in enumerate(self.operations)
+            if index > 0
+            and operation.operation_type in FUSABLE_OPERATIONS
+            and self.operations[index - 1].is_gemm
+        )
+
+    def _follow_fused(self, operations):
+        """Give each fused operation the endpoints of its GEMM."""
+        operations = list(operations)
+        for index in range(1, len(operations)):
+            if self.is_fused(index):
+                operations[index] = replace(
+                    operations[index],
+                    endpoint_ids=operations[index - 1].endpoint_ids,
+                )
+        return tuple(operations)
 
     @property
     def gemm_indexes(self):
@@ -128,6 +189,8 @@ class WorkloadMapping:
         )
 
     def handoff_kind(self, handoff_index):
+        if self.handoffs[handoff_index] == FUSED_ACTIVATION_POLICY:
+            return FUSED_HANDOFF_KIND
         producer = self.operations[handoff_index]
         consumer = self.operations[handoff_index + 1]
         return f"{producer.endpoint_kind}_to_{consumer.endpoint_kind}"
@@ -135,7 +198,35 @@ class WorkloadMapping:
     def with_operation(self, operation_index, **changes):
         operations = list(self.operations)
         operations[operation_index] = replace(operations[operation_index], **changes)
-        return WorkloadMapping(operations=tuple(operations), handoffs=self.handoffs)
+        return WorkloadMapping(
+            operations=self._follow_fused(operations), handoffs=self.handoffs
+        )
+
+    def with_fusion_change(
+        self,
+        operation_index,
+        endpoint_kind,
+        endpoint_ids,
+        incoming_policy,
+        outgoing_policy=None,
+    ):
+        """Move one operation between its GEMM's SAs and the FPGA.
+
+        The endpoint, the handoff into the operation, and the handoff out of
+        it change together. ``outgoing_policy`` is not used for the last
+        operation.
+        """
+        operations = list(self.operations)
+        operations[operation_index] = replace(
+            operations[operation_index],
+            endpoint_kind=endpoint_kind,
+            endpoint_ids=tuple(endpoint_ids),
+        )
+        handoffs = list(self.handoffs)
+        handoffs[operation_index - 1] = incoming_policy
+        if operation_index < len(handoffs):
+            handoffs[operation_index] = outgoing_policy
+        return WorkloadMapping(operations=tuple(operations), handoffs=tuple(handoffs))
 
     def with_gemms(self, **changes):
         """Return a copy with the same change in every GEMM."""
@@ -160,7 +251,12 @@ class WorkloadMapping:
         every GEMM. An operation that loses its last endpoint is invalid.
         """
         operations = []
-        for operation in self.operations:
+        for index, operation in enumerate(self.operations):
+            if self.is_fused(index):
+                operations.append(
+                    replace(operation, endpoint_ids=operations[-1].endpoint_ids)
+                )
+                continue
             endpoint_ids = [
                 endpoint_id_map[endpoint_id]
                 for endpoint_id in operation.endpoint_ids
@@ -231,10 +327,14 @@ def initial_workload_mapping(graph, architecture, profile, search_space=None):
     the profile's movement policy; when the search space lists the policies for
     that handoff kind and the profile's policy is not one of them, the first
     listed policy is used.
+
+    An architecture with no FPGA can run a ReLU that directly follows a GEMM:
+    the ReLU starts fused with that GEMM.
     """
     endpoints = validate_modular_architecture(architecture)
     gemm_settings = effective_gemm_mapping(architecture, profile)
     operations = []
+    fused_indexes = []
     for operation in graph.operations:
         endpoint_kind = endpoint_kind_for(operation.operation_type)
         if endpoint_kind == "sa":
@@ -256,10 +356,25 @@ def initial_workload_mapping(graph, architecture, profile, search_space=None):
             )
             continue
         if not endpoints.fpga_ids:
-            raise UnsupportedEvaluation(
-                f"operation type '{operation.operation_type}' requires an FPGA "
-                "endpoint"
+            if (
+                operation.operation_type not in FUSABLE_OPERATIONS
+                or not operations
+                or not operations[-1].is_gemm
+            ):
+                raise UnsupportedEvaluation(
+                    f"operation type '{operation.operation_type}' requires an FPGA "
+                    "endpoint"
+                )
+            fused_indexes.append(len(operations))
+            operations.append(
+                OperationMapping(
+                    operation_id=operation.operation_id,
+                    operation_type=operation.operation_type,
+                    endpoint_kind="sa",
+                    endpoint_ids=operations[-1].endpoint_ids,
+                )
             )
+            continue
         operations.append(
             OperationMapping(
                 operation_id=operation.operation_id,
@@ -269,10 +384,10 @@ def initial_workload_mapping(graph, architecture, profile, search_space=None):
             )
         )
 
-    mapping = WorkloadMapping(
-        operations=tuple(operations),
-        handoffs=(profile.movement_policy,) * max(0, len(operations) - 1),
-    )
+    handoffs = [profile.movement_policy] * max(0, len(operations) - 1)
+    for index in fused_indexes:
+        handoffs[index - 1] = FUSED_ACTIVATION_POLICY
+    mapping = WorkloadMapping(operations=tuple(operations), handoffs=tuple(handoffs))
     for handoff_index in range(len(mapping.handoffs)):
         options = movement_policy_options(
             search_space, mapping.handoff_kind(handoff_index)

@@ -57,7 +57,11 @@ from system.utils.OperationAssignment import (
     EndpointAssignment,
     build_assignment_policy,
 )
-from system.utils.WorkloadMapping import initial_workload_mapping
+from system.utils.WorkloadMapping import (
+    FUSED_ACTIVATION_POLICY,
+    endpoint_kind_for,
+    initial_workload_mapping,
+)
 from system.utils.DesignPointFile import (
     check_design_point_workload,
     design_point_document,
@@ -65,6 +69,10 @@ from system.utils.DesignPointFile import (
     read_design_point,
 )
 from system.utils.FpgaActivationMovement import register_fpga_activation_movement
+from system.utils.FusedActivation import (
+    FUSED_RELU_EVALUATOR_KEY,
+    register_fused_activation,
+)
 from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
 from system.utils.TensorMovement import MovementRequest, build_movement_service
 from system.utils.TransferEstimator import build_transfer_cost_model
@@ -90,6 +98,7 @@ from config import calibration_mode, print_info, fast_test, latency_en, sram_sel
 # DELETE-ME with system/utils/PlaceholderPolicies.py.
 register_placeholder_policies()
 register_fpga_activation_movement()
+register_fused_activation()
 
 
 #########
@@ -457,6 +466,7 @@ def build_default_evaluator_registry():
     )
     register_placeholder_policies(registry)
     register_rule4ml_evaluators(registry)
+    register_fused_activation(registry)
     return registry
 
 
@@ -552,6 +562,10 @@ def evaluate_atlas_graph(
     The workload mapping gives the endpoints and GEMM settings of each
     operation and the movement policy of each handoff. Without one, every
     operation uses the profile's assignment policy and movement policy.
+
+    A movement policy with ``fuses_consumer`` fuses its consumer with its
+    producer. The two operations then make one unit: the first operation of
+    the unit is the producer of the handoff that leaves the unit.
     """
     profile = profile or load_evaluation_profile()
     transfer_model = (
@@ -587,7 +601,6 @@ def evaluate_atlas_graph(
         )
     planned = []
     for index, operation in enumerate(operations):
-        evaluator_settings = profile.evaluator_settings_for(operation.operation_type)
         if mapping is None:
             assignment = assignment_policy.endpoint_for(operation.operation_type)
         else:
@@ -599,12 +612,19 @@ def evaluate_atlas_graph(
                     "endpoint"
                 )
             assignment = EndpointAssignment(mapped.endpoint_ids, mapped.endpoint_kind)
+        # An operation that is not on the endpoint kind of its type has its
+        # own evaluator, named "<type>@<kind>" in the profile.
+        evaluator_key = operation.operation_type
+        if assignment.endpoint_kind != endpoint_kind_for(operation.operation_type):
+            evaluator_key = f"{operation.operation_type}@{assignment.endpoint_kind}"
+        evaluator_settings = profile.evaluator_settings_for(evaluator_key)
+        if mapping is not None:
             evaluator_settings.update(mapped.evaluator_settings())
         provisional_access = TensorAccessPlan(
             activation_from_dram=(index == 0),
             output_to_dram=(index == len(operations) - 1),
         )
-        binding = registry.get(profile.evaluator_id_for(operation.operation_type))
+        binding = registry.get(profile.evaluator_id_for(evaluator_key))
         context = EvaluationContext(
             cache=cache,
             architecture=arch_dict,
@@ -624,15 +644,27 @@ def evaluate_atlas_graph(
             }
         )
 
+    # unit_first[i] is the first operation of the unit of operation i, and
+    # unit_last[i] is the last one. An operation that is not fused is a unit.
+    unit_first = list(range(len(planned)))
+    for index in range(1, len(planned)):
+        if getattr(movement_service_for(index), "fuses_consumer", False):
+            unit_first[index] = unit_first[index - 1]
+    unit_last = list(range(len(planned)))
+    for index in range(len(planned) - 2, -1, -1):
+        if unit_first[index + 1] == unit_first[index]:
+            unit_last[index] = unit_last[index + 1]
+
     movement_plans = [None] * len(planned)
     for index in range(1, len(planned)):
-        producer = planned[index - 1]
+        tensor_producer = planned[index - 1]
+        producer = planned[unit_first[index - 1]]
         consumer = planned[index]
         movement_plans[index] = movement_service_for(index).plan(
             MovementRequest(
                 handoff_index=index,
-                tensor_id=producer["operation"].output_tensor_id,
-                tensor_shape=producer["operation"].output_tensor.shape,
+                tensor_id=tensor_producer["operation"].output_tensor_id,
+                tensor_shape=tensor_producer["operation"].output_tensor.shape,
                 producer_operation=producer["operation"],
                 consumer_operation=consumer["operation"],
                 producer_assignment=producer["assignment"],
@@ -654,13 +686,20 @@ def evaluate_atlas_graph(
         incoming_uses_dram = movement is not None and getattr(
             movement, "uses_dram", False
         )
-        outgoing = movement_plans[index + 1] if index + 1 < len(planned) else None
+        # The first operation of a unit holds the tensor of the unit, so it
+        # reads the handoff that leaves the unit. A fused operation has no
+        # tensor access of its own.
+        is_unit_first = unit_first[index] == index
+        last = unit_last[index]
+        outgoing = movement_plans[last + 1] if last + 1 < len(planned) else None
         outgoing_uses_dram = outgoing is not None and getattr(
             outgoing, "uses_dram", False
         )
         access_plan = TensorAccessPlan(
-            activation_from_dram=(index == 0 or incoming_uses_dram),
-            output_to_dram=(index == len(operations) - 1 or outgoing_uses_dram),
+            activation_from_dram=is_unit_first
+            and (index == 0 or incoming_uses_dram),
+            output_to_dram=is_unit_first
+            and (last == len(operations) - 1 or outgoing_uses_dram),
         )
         context = item["context"]
         context.prepared_operation = item["prepared"]
@@ -754,7 +793,9 @@ def evaluate_atlas_design_point(
         lifetime_years=3,
     )
     movement_policies = (
-        {profile.movement_policy} if mapping is None else set(mapping.handoffs)
+        {profile.movement_policy}
+        if mapping is None
+        else set(mapping.handoffs) - {FUSED_ACTIVATION_POLICY}
     ) or {profile.movement_policy}
     diagnostics = {
         "intermediate_policy_requested": (
@@ -1497,6 +1538,8 @@ def _run_modular_annealing(
                 current_mapping,
                 search_space,
                 rng=rng,
+                default_movement_policy=profile.movement_policy,
+                allow_fusion=FUSED_RELU_EVALUATOR_KEY in profile.evaluators,
             )
         except UnsupportedEvaluation:
             proposals.append(None)

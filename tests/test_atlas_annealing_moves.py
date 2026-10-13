@@ -173,6 +173,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
                     start,
                     params,
                     rng=_MoveRng(move_name),
+                    default_movement_policy=self.profile.movement_policy,
+                    allow_fusion=True,
                 )
 
                 self.assertEqual(selected, move_name)
