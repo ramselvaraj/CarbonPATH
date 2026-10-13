@@ -14,6 +14,8 @@ Keras sources are committed for provenance and reproducibility.
 - `dense_relu_softmax.graph_dump.json`: raw ATLAS graph dump.
 - `dense_activations.keras.py`: Keras/HGQ2 model source.
 - `dense_activations.graph_dump.json`: raw ATLAS graph dump.
+- `dense_rule4ml_activations.keras.py`: Keras/HGQ2 model source.
+- `dense_rule4ml_activations.graph_dump.json`: raw ATLAS graph dump.
 
 ## Provenance
 
@@ -74,6 +76,19 @@ and `tanh`.
 ATLAS revision `9501bd5` does not convert ReLU6, PReLU, hard sigmoid, hard
 swish, or hard tanh: its bit-exact pass stops with an error. CarbonPATH has no
 operation type for them.
+
+## dense_rule4ml_activations
+
+```text
+Input(8,16)
+-> QDense(16) -> relu -> QDense(32) -> sigmoid
+-> QDense(32) -> tanh -> QDense(16) -> Softmax(axis=-1) -> QDense(8)
+```
+
+Expected operations: five `Gemm` nodes and one node each of `relu`, `sigmoid`,
+`tanh`, and `softmax`. These are the four activations that rule4ml predicts.
+The profile `cfg/profiles/rule4ml_fpga_ops_v3.json` names the rule4ml
+evaluator of each one.
 
 ## Regenerating
 

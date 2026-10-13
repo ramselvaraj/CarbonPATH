@@ -28,6 +28,8 @@ from system.utils.WorkloadMapping import (
 
 
 GRAPH = Path("cfg/examples/atlas/dense_activations.graph_dump.json")
+RULE4ML_GRAPH = Path("cfg/examples/atlas/dense_rule4ml_activations.graph_dump.json")
+RULE4ML_OPS_PROFILE = Path("cfg/profiles/rule4ml_fpga_ops_v3.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 PROFILE = Path("cfg/profiles/atlas_fused_activations_v1.json")
 RULE4ML_PROFILE = Path("cfg/profiles/rule4ml_fused_activations_v1.json")
@@ -226,6 +228,31 @@ class ActivationTypeTests(unittest.TestCase):
         self.assertEqual(
             [call.kwargs["activation"] for call in predict.call_args_list],
             ["relu", "relu", "sigmoid", "tanh"],
+        )
+
+    def test_rule4ml_graph_uses_a_rule4ml_evaluator_for_each_activation(self):
+        graph = load_atlas_graph(RULE4ML_GRAPH)
+        profile = load_evaluation_profile(RULE4ML_OPS_PROFILE)
+        activations = ["relu", "sigmoid", "tanh", "softmax"]
+        self.assertEqual(
+            [operation.operation_type for operation in graph.operations[1::2]],
+            activations,
+        )
+
+        with patch.object(
+            Rule4MlEvaluators, "predict_activation", return_value=PREDICTION
+        ) as predict:
+            evaluation = evaluate_atlas_graph(
+                self.cache, self.architecture, graph, profile=profile
+            )
+
+        self.assertEqual(
+            [result.evaluator_id for result in evaluation.results[1::2]],
+            [f"rule4ml_fpga_{activation}_v1" for activation in activations],
+        )
+        self.assertEqual(
+            [call.kwargs["activation"] for call in predict.call_args_list],
+            activations,
         )
 
     def test_registry_has_an_evaluator_for_each_type(self):
