@@ -1,0 +1,37 @@
+{
+    "profile": "rule4ml_fused_activations_v1",
+    "version": 1,
+    "evaluators": {
+        "gemm": "legacy_scale_sim_gemm_v1",
+        "relu": {
+            "id": "rule4ml_hybrid_relu_v1",
+            "settings": {"latency_floor": "legacy_lanes", "null_energy_per_element_pj": 0.1}
+        },
+        "relu@sa": {
+            "id": "sa_fused_relu_v1",
+            "settings": {"latency_ns": 0.0, "energy_per_element_pj": 0.0}
+        },
+        "leaky_relu": {
+            "id": "rule4ml_hybrid_leaky_relu_v1",
+            "settings": {"latency_floor": "legacy_lanes", "null_energy_per_element_pj": 0.1}
+        },
+        "leaky_relu@sa": {
+            "id": "sa_fused_leaky_relu_v1",
+            "settings": {"latency_ns": 0.0, "energy_per_element_pj": 0.0}
+        },
+        "thresholded_relu": {
+            "id": "rule4ml_hybrid_thresholded_relu_v1",
+            "settings": {"latency_floor": "legacy_lanes", "null_energy_per_element_pj": 0.1}
+        },
+        "thresholded_relu@sa": {
+            "id": "sa_fused_thresholded_relu_v1",
+            "settings": {"latency_ns": 0.0, "energy_per_element_pj": 0.0}
+        },
+        "sigmoid": "rule4ml_fpga_sigmoid_v1",
+        "tanh": "rule4ml_fpga_tanh_v1",
+        "softmax": {"id": "rule4ml_hybrid_softmax_v1", "settings": {}}
+    },
+    "assignment_policy": "all_sas_single_fpga_v1",
+    "movement_policy": "distributed_activation_boundary_v2",
+    "transfer_model": "route_transfer_v1"
+}

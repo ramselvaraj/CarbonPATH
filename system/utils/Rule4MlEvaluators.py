@@ -1,7 +1,7 @@
 """rule4ml operation evaluators, input adapters, and registration.
 
-A rule4ml evaluator estimates one FPGA activation operation (ReLU or Softmax)
-with rule4ml's trained latency/resource predictors instead of CarbonPATH's
+A rule4ml evaluator estimates one FPGA activation operation (for example ReLU
+or Softmax) with rule4ml's trained latency/resource predictors instead of CarbonPATH's
 resource-derived legacy model. It is a drop-in operation evaluator: an
 evaluation profile names it, the executor and movement policies are unchanged.
 
@@ -320,12 +320,56 @@ class Rule4MlSoftmaxEvaluator(Rule4MlActivationEvaluator):
     activation = "softmax"
 
 
+#: The rule4ml activation that predicts each other operation type. rule4ml
+#: has predictors for ReLU, sigmoid, tanh, and softmax only. A leaky or
+#: thresholded ReLU uses the ReLU prediction: an assumed rate.
+RULE4ML_ACTIVATIONS = {
+    "leaky_relu": "relu",
+    "thresholded_relu": "relu",
+    "sigmoid": "sigmoid",
+    "tanh": "tanh",
+}
+
+
+def rule4ml_input_adapter(operation_type):
+    """Build the rule4ml input adapter of one operation type."""
+    adapter_class = type(
+        f"Rule4Ml_{operation_type}_InputAdapter",
+        (Rule4MlActivationInputAdapter,),
+        {
+            "operation_type": operation_type,
+            "input_adapter_id": f"rule4ml_{operation_type}_input_v1",
+        },
+    )
+    return adapter_class()
+
+
+def rule4ml_evaluator(operation_type, evaluator_id, base=None):
+    """Build a rule4ml evaluator of one operation type from a base class."""
+    evaluator_class = type(
+        f"Rule4Ml_{evaluator_id}",
+        (base or Rule4MlActivationEvaluator,),
+        {
+            "operation_type": operation_type,
+            "evaluator_id": evaluator_id,
+            "input_adapter_id": f"rule4ml_{operation_type}_input_v1",
+            "activation": RULE4ML_ACTIVATIONS[operation_type],
+        },
+    )
+    return evaluator_class()
+
+
 def register_rule4ml_evaluators(registry):
     """Register the rule4ml activation evaluators into ``registry``."""
     if registry is None:
         raise ValueError("register_rule4ml_evaluators requires an evaluator registry")
     registry.register(Rule4MlReluEvaluator(), Rule4MlReluInputAdapter())
     registry.register(Rule4MlSoftmaxEvaluator(), Rule4MlSoftmaxInputAdapter())
+    for operation_type in RULE4ML_ACTIVATIONS:
+        registry.register(
+            rule4ml_evaluator(operation_type, f"rule4ml_fpga_{operation_type}_v1"),
+            rule4ml_input_adapter(operation_type),
+        )
     # Imported here because the hybrid module imports this one.
     from system.utils.Rule4MlHybridEvaluators import (
         register_rule4ml_hybrid_evaluators,

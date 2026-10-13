@@ -1,15 +1,15 @@
-"""Fused activation: a ReLU that runs on the systolic arrays of its GEMM.
+"""Fused activation: an activation that runs on the systolic arrays of its GEMM.
 
-Fusion is a property of one GEMM -> ReLU handoff. The movement policy
-``fused_sa_activation_v1`` says that the ReLU runs where the GEMM output is, so
-the tensor does not move. The executor reads ``fuses_consumer`` and makes the
-GEMM the producer of the next handoff.
+Fusion is a property of one GEMM -> activation handoff. The movement policy
+``fused_sa_activation_v1`` says that the activation runs where the GEMM output
+is, so the tensor does not move. The executor reads ``fuses_consumer`` and
+makes the GEMM the producer of the next handoff.
 
-``sa_fused_relu_v1`` is the evaluator of the fused ReLU. An evaluation profile
-names it with the key ``relu@sa``. Its latency and energy come from the
-evaluator settings. The default of each is zero, and the systolic array gets
-no area or power for the ReLU hardware: these are assumed rates, not hardware
-characterizations.
+Each simple activation has a fused evaluator, ``sa_fused_<type>_v1``. An
+evaluation profile names it with the key ``<type>@sa``, for example
+``relu@sa``. Its latency and energy come from the evaluator settings. The
+default of each is zero, and the systolic array gets no area or power for the
+activation hardware: these are assumed rates, not hardware characterizations.
 """
 
 from __future__ import annotations
@@ -34,8 +34,18 @@ from system.utils.WorkloadMapping import (
 )
 
 
-#: The evaluation-profile key of the evaluator for a ReLU on a systolic array.
-FUSED_RELU_EVALUATOR_KEY = "relu@sa"
+def fused_evaluator_key(operation_type):
+    """The evaluation-profile key of the evaluator for a fused activation."""
+    return f"{operation_type}@sa"
+
+
+def fusion_types(profile):
+    """The activation types that the profile can evaluate when fused."""
+    return tuple(
+        operation_type
+        for operation_type in FUSABLE_OPERATIONS
+        if fused_evaluator_key(operation_type) in profile.evaluators
+    )
 
 _SETTINGS = ("latency_ns", "energy_per_element_pj")
 
@@ -58,8 +68,8 @@ class FusedSaActivationService:
             or consumer.operation_type not in FUSABLE_OPERATIONS
         ):
             raise UnsupportedEvaluation(
-                f"movement policy '{self.policy_id}' fuses a ReLU with the GEMM "
-                f"directly before it, not {producer.operation_type}->"
+                f"movement policy '{self.policy_id}' fuses a simple activation "
+                f"with the GEMM directly before it, not {producer.operation_type}->"
                 f"{consumer.operation_type}"
             )
         if (
@@ -91,13 +101,14 @@ class SaFusedReluInput:
 
 
 class SaFusedReluInputAdapter(OperationInputAdapter):
-    """Input adapter for the fused ReLU model."""
+    """Input adapter for the fused activation model."""
 
-    input_adapter_id = "sa_fused_relu_input_v1"
-    operation_type = "relu"
+    def __init__(self, operation_type="relu"):
+        self.operation_type = operation_type
+        self.input_adapter_id = f"sa_fused_{operation_type}_input_v1"
 
     def build_input(self, operation, access_plan):
-        if operation.operation_type != "relu":
+        if operation.operation_type != self.operation_type:
             raise UnsupportedEvaluation(
                 f"SaFusedReluInputAdapter cannot read "
                 f"'{operation.operation_type}' operation "
@@ -110,36 +121,38 @@ class SaFusedReluInputAdapter(OperationInputAdapter):
 
 
 class SaFusedReluEvaluator(OperationEvaluator):
-    """Operation evaluator for a ReLU fused with the GEMM on its SAs.
+    """Operation evaluator for an activation fused with the GEMM on its SAs.
 
     Compute latency is the ``latency_ns`` setting. Dynamic energy is the
     element count times the ``energy_per_element_pj`` setting.
     """
 
-    evaluator_id = "sa_fused_relu_v1"
-    operation_type = "relu"
-    input_adapter_id = "sa_fused_relu_input_v1"
+    def __init__(self, operation_type="relu"):
+        self.operation_type = operation_type
+        self.evaluator_id = f"sa_fused_{operation_type}_v1"
+        self.input_adapter_id = f"sa_fused_{operation_type}_input_v1"
 
     @staticmethod
     def _setting(settings, name):
         value = settings.get(name, 0.0)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise UnsupportedEvaluation(
-                f"fused ReLU setting '{name}' must be a non-negative number"
+                f"fused activation setting '{name}' must be a non-negative number"
             )
         return float(value)
 
     def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
         if assignment.endpoint_kind != "sa":
             raise UnsupportedEvaluation(
-                f"{evaluator_input.operation_id}: the fused ReLU evaluator "
+                f"{evaluator_input.operation_id}: the fused activation evaluator "
                 "requires assignment on systolic arrays"
             )
         settings = context.evaluator_settings or {}
         unknown = sorted(set(settings) - set(_SETTINGS))
         if unknown:
             raise UnsupportedEvaluation(
-                "unsupported fused ReLU evaluator setting(s): " + ", ".join(unknown)
+                "unsupported fused activation evaluator setting(s): "
+                + ", ".join(unknown)
             )
         return OperationEstimate(
             operation_id=evaluator_input.operation_id,
@@ -151,7 +164,7 @@ class SaFusedReluEvaluator(OperationEvaluator):
 
 
 def register_fused_activation(registry=None):
-    """Register the movement policy, and the evaluator when given a registry.
+    """Register the movement policy, and the evaluators when given a registry.
 
     The movement policy registration is idempotent.
     """
@@ -159,4 +172,8 @@ def register_fused_activation(registry=None):
         FusedSaActivationService.policy_id, FusedSaActivationService
     )
     if registry is not None:
-        registry.register(SaFusedReluEvaluator(), SaFusedReluInputAdapter())
+        for operation_type in FUSABLE_OPERATIONS:
+            registry.register(
+                SaFusedReluEvaluator(operation_type),
+                SaFusedReluInputAdapter(operation_type),
+            )

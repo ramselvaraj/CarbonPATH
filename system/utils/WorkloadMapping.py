@@ -16,6 +16,7 @@ import hashlib
 import json
 
 from system.utils.ArchitectureIdentity import effective_gemm_mapping
+from system.utils.AtlasGraphAdapter import SIMPLE_ACTIVATIONS
 from system.utils.ArchitectureModel import validate_modular_architecture
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -26,7 +27,7 @@ GEMM_TILE_ORDERS = ("ascending", "descending")
 #: The movement policy of a handoff whose consumer is fused with its GEMM.
 FUSED_ACTIVATION_POLICY = "fused_sa_activation_v1"
 #: The operation types that can be fused with the GEMM directly before them.
-FUSABLE_OPERATIONS = ("relu",)
+FUSABLE_OPERATIONS = SIMPLE_ACTIVATIONS
 FUSED_HANDOFF_KIND = "sa_fused"
 
 
@@ -328,8 +329,8 @@ def initial_workload_mapping(graph, architecture, profile, search_space=None):
     that handoff kind and the profile's policy is not one of them, the first
     listed policy is used.
 
-    An architecture with no FPGA can run a ReLU that directly follows a GEMM:
-    the ReLU starts fused with that GEMM.
+    An architecture with no FPGA can run a fusable activation that directly
+    follows a GEMM: the activation starts fused with that GEMM.
     """
     endpoints = validate_modular_architecture(architecture)
     gemm_settings = effective_gemm_mapping(architecture, profile)

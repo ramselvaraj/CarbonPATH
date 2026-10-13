@@ -24,10 +24,14 @@ import dataclasses
 
 from system.utils.NonGemmEstimator import ReluComputeEstimator
 from system.utils.OperationEvaluator import OperationEstimate
+from system.utils.AtlasGraphAdapter import SIMPLE_ACTIVATIONS
 from system.utils.Rule4MlEvaluators import (
+    RULE4ML_ACTIVATIONS,
     Rule4MlActivationEvaluator,
     Rule4MlReluInputAdapter,
     Rule4MlSoftmaxInputAdapter,
+    rule4ml_evaluator,
+    rule4ml_input_adapter,
 )
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -124,4 +128,16 @@ def register_rule4ml_hybrid_evaluators(registry):
         )
     registry.register(Rule4MlHybridReluEvaluator(), Rule4MlReluInputAdapter())
     registry.register(Rule4MlHybridSoftmaxEvaluator(), Rule4MlSoftmaxInputAdapter())
+    # The other simple activations use the hybrid ReLU model: the ReLU lane
+    # floor and the ReLU energy of the FPGA.
+    for operation_type in SIMPLE_ACTIVATIONS:
+        if operation_type in RULE4ML_ACTIVATIONS:
+            registry.register(
+                rule4ml_evaluator(
+                    operation_type,
+                    f"rule4ml_hybrid_{operation_type}_v1",
+                    base=Rule4MlHybridReluEvaluator,
+                ),
+                rule4ml_input_adapter(operation_type),
+            )
     return registry

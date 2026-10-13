@@ -36,7 +36,11 @@ from system.utils.IntermediateMemoryPolicy import (
     plan_boundary,
 )
 from system.utils.ArchitectureIdentity import architecture_fingerprint
-from system.utils.AtlasGraphAdapter import gemm_sequence_to_atlas_graph, load_atlas_graph
+from system.utils.AtlasGraphAdapter import (
+    SIMPLE_ACTIVATIONS,
+    gemm_sequence_to_atlas_graph,
+    load_atlas_graph,
+)
 from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.NonGemmEstimator import (
     FpgaReluEvaluator,
@@ -69,10 +73,7 @@ from system.utils.DesignPointFile import (
     read_design_point,
 )
 from system.utils.FpgaActivationMovement import register_fpga_activation_movement
-from system.utils.FusedActivation import (
-    FUSED_RELU_EVALUATOR_KEY,
-    register_fused_activation,
-)
+from system.utils.FusedActivation import fusion_types, register_fused_activation
 from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
 from system.utils.TensorMovement import MovementRequest, build_movement_service
 from system.utils.TransferEstimator import build_transfer_cost_model
@@ -457,7 +458,11 @@ def build_default_evaluator_registry():
     registry.register(
         LegacyScaleSimGemmEvaluator(), LegacyScaleSimGemmInputAdapter()
     )
-    registry.register(FpgaReluEvaluator(), LegacyReluInputAdapter())
+    for operation_type in SIMPLE_ACTIVATIONS:
+        registry.register(
+            FpgaReluEvaluator(operation_type=operation_type),
+            LegacyReluInputAdapter(operation_type),
+        )
     registry.register(
         PlaceholderHlsReluEvaluator(), PlaceholderHlsReluInputAdapter()
     )
@@ -1539,7 +1544,7 @@ def _run_modular_annealing(
                 search_space,
                 rng=rng,
                 default_movement_policy=profile.movement_policy,
-                allow_fusion=FUSED_RELU_EVALUATOR_KEY in profile.evaluators,
+                fusion_types=fusion_types(profile),
             )
         except UnsupportedEvaluation:
             proposals.append(None)

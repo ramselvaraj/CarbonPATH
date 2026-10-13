@@ -260,15 +260,17 @@ def _mutate_handoff_movement(mapping, params, rng):
     )
 
 
-def _fusion_candidates(mapping, endpoints):
+def _fusion_candidates(mapping, endpoints, fusion_types):
     """The operations whose fusion can change.
 
-    Each one can be fused. A fused one can go back only to an FPGA.
+    Each one of a type in ``fusion_types`` can be fused. A fused one can go
+    back only to an FPGA.
     """
     return [
         index
         for index in mapping.fusable_indexes
-        if not mapping.is_fused(index) or endpoints.fpga_ids
+        if mapping.operations[index].operation_type in fusion_types
+        and (not mapping.is_fused(index) or endpoints.fpga_ids)
     ]
 
 
@@ -293,15 +295,17 @@ def _handoff_policy(params, handoff_kind, current, default_movement_policy):
     return default_movement_policy
 
 
-def _mutate_relu_fusion(mapping, endpoints, default_movement_policy, params, rng):
-    """Fuse one ReLU with the GEMM before it, or move a fused one to the FPGA.
+def _mutate_relu_fusion(
+    mapping, endpoints, default_movement_policy, fusion_types, params, rng
+):
+    """Fuse one activation with the GEMM before it, or move a fused one to the FPGA.
 
-    The endpoint of the ReLU and the handoffs on its two sides change in one
-    move, because each of them is invalid without the others.
+    The endpoint of the activation and the handoffs on its two sides change in
+    one move, because each of them is invalid without the others.
     """
-    candidates = _fusion_candidates(mapping, endpoints)
+    candidates = _fusion_candidates(mapping, endpoints, fusion_types)
     if not candidates:
-        raise NoAlternative("no ReLU can change its fusion")
+        raise NoAlternative("no activation can change its fusion")
     index = rng.choice(candidates)
     last = index == len(mapping.operations) - 1
     if mapping.is_fused(index):
@@ -424,7 +428,7 @@ def mutate_atlas_design_point(
     params,
     rng=None,
     default_movement_policy=None,
-    allow_fusion=False,
+    fusion_types=(),
 ):
     """Return ``(architecture, workload mapping, move_name)`` for one move.
 
@@ -432,8 +436,8 @@ def mutate_atlas_design_point(
     invariant is validated before returning; an invalid proposal raises
     :class:`UnsupportedEvaluation` so the caller can record it as invalid.
 
-    ``allow_fusion`` puts the fusion move in the search. It is true when the
-    evaluation profile has an evaluator for a fused ReLU.
+    ``fusion_types`` lists the activation types that the fusion move can
+    change: the types for which the evaluation profile has a fused evaluator.
     ``default_movement_policy`` is the movement policy of a handoff kind that
     the search space does not list.
     """
@@ -450,7 +454,7 @@ def mutate_atlas_design_point(
             if not candidate.startswith("fpga_") or candidate == "fpga_count"
         ]
 
-    if not allow_fusion or not _fusion_candidates(mapping, endpoints):
+    if not _fusion_candidates(mapping, endpoints, fusion_types):
         candidate_moves.remove("relu_fusion")
 
     skip = params.get("skip_moves_without_alternative", True)
@@ -465,6 +469,7 @@ def mutate_atlas_design_point(
                 params,
                 rng,
                 default_movement_policy,
+                fusion_types,
             )
         except NoAlternative:
             if not skip:
@@ -475,7 +480,14 @@ def mutate_atlas_design_point(
 
 
 def _apply_move(
-    move, architecture, mapping, endpoints, params, rng, default_movement_policy=None
+    move,
+    architecture,
+    mapping,
+    endpoints,
+    params,
+    rng,
+    default_movement_policy=None,
+    fusion_types=(),
 ):
     if move == "sa_count":
         return _mutate_sa_count(architecture, mapping, params, rng)
@@ -487,7 +499,7 @@ def _apply_move(
         return architecture, _mutate_handoff_movement(mapping, params, rng)
     if move == "relu_fusion":
         return architecture, _mutate_relu_fusion(
-            mapping, endpoints, default_movement_policy, params, rng
+            mapping, endpoints, default_movement_policy, fusion_types, params, rng
         )
 
     # Every move below draws the SA first, also the moves that do not use it.

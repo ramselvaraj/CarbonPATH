@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from system.utils.AtlasGraphAdapter import FPGA_OPERATIONS
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
@@ -62,7 +63,7 @@ class FixedSingleSaSingleFpgaAssignment:
     def endpoint_for(self, operation_type):
         if operation_type == "gemm":
             return EndpointAssignment(self.sa_id, "sa")
-        if operation_type in ("relu", "softmax"):
+        if operation_type in FPGA_OPERATIONS:
             return EndpointAssignment(self.fpga_id, "fpga")
         raise UnsupportedEvaluation(
             f"assignment policy has no endpoint for operation type '{operation_type}'"
@@ -89,7 +90,7 @@ class AllSystolicArraysSingleFpgaAssignment:
     def endpoint_for(self, operation_type):
         if operation_type == "gemm":
             return EndpointAssignment(self.sa_ids, "sa")
-        if operation_type in ("relu", "softmax"):
+        if operation_type in FPGA_OPERATIONS:
             if not self.fpga_ids:
                 raise UnsupportedEvaluation(
                     f"operation type '{operation_type}' requires an FPGA endpoint"

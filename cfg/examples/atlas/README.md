@@ -12,6 +12,8 @@ Keras sources are committed for provenance and reproducibility.
 - `dense_softmax.graph_dump.json`: raw ATLAS graph dump.
 - `dense_relu_softmax.keras.py`: Keras/HGQ2 model source.
 - `dense_relu_softmax.graph_dump.json`: raw ATLAS graph dump.
+- `dense_activations.keras.py`: Keras/HGQ2 model source.
+- `dense_activations.graph_dump.json`: raw ATLAS graph dump.
 
 ## Provenance
 
@@ -55,6 +57,23 @@ Input(8,16)
 Expected operations: three `Gemm` nodes, one `relu` `Activation` node, and one
 `Softmax` node, in the order `gemm`, `relu`, `gemm`, `softmax`, `gemm`. The
 Softmax has output shape `(8,32)` and `attrs.axis == -1`.
+
+## dense_activations
+
+```text
+Input(8,16)
+-> QDense(16) -> LeakyReLU(0.125) -> QDense(32) -> ReLU(threshold=1.0)
+-> QDense(32) -> sigmoid -> QDense(16) -> tanh -> QDense(8)
+```
+
+Expected operations: five `Gemm` nodes, two `ParametrizedActivation` nodes
+(`leakyrelu`, `thresholdedrelu`), and two `Activation` nodes (`sigmoid`,
+`tanh`). CarbonPATH reads them as `leaky_relu`, `thresholded_relu`, `sigmoid`,
+and `tanh`.
+
+ATLAS revision `9501bd5` does not convert ReLU6, PReLU, hard sigmoid, hard
+swish, or hard tanh: its bit-exact pass stops with an error. CarbonPATH has no
+operation type for them.
 
 ## Regenerating
 

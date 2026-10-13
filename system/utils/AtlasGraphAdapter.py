@@ -22,7 +22,23 @@ from types import MappingProxyType
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
-SUPPORTED_OPERATION_TYPES = ("gemm", "relu", "softmax")
+#: Elementwise activations made of simple logic. Each one can be fused with
+#: the GEMM directly before it.
+SIMPLE_ACTIVATIONS = ("relu", "leaky_relu", "thresholded_relu")
+#: Elementwise activations that use a lookup table. They run on an FPGA.
+TABLE_ACTIVATIONS = ("sigmoid", "tanh")
+#: Every operation type that an FPGA endpoint runs.
+FPGA_OPERATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + ("softmax",)
+SUPPORTED_OPERATION_TYPES = ("gemm",) + FPGA_OPERATIONS
+
+# ATLAS node class -> ATLAS ``activation`` attribute -> operation type.
+_ACTIVATION_TYPES = {
+    "Activation": {"relu": "relu", "sigmoid": "sigmoid", "tanh": "tanh"},
+    "ParametrizedActivation": {
+        "leakyrelu": "leaky_relu",
+        "thresholdedrelu": "thresholded_relu",
+    },
+}
 _GENERIC_STEMS = {"graph_dump", "graph", "dump"}
 _MISSING = object()
 _EMPTY_MAPPING = MappingProxyType({})
@@ -271,13 +287,15 @@ def parse_gemm_node(node_view):
     )
 
 
-def parse_relu_node(node_view):
+def parse_activation_node(node_view):
     operation_id = _require_name(node_view)
-    if node_view.attrs.get("activation") != "relu":
+    activation = node_view.attrs.get("activation")
+    operation_type = _ACTIVATION_TYPES[node_view.node_class].get(activation)
+    if operation_type is None:
         raise UnsupportedEvaluation(
-            f"{operation_id}: only relu activation is supported"
+            f"{operation_id}: unsupported activation '{activation}'"
         )
-    return _parse_elementwise_node(node_view, operation_id, "relu")
+    return _parse_elementwise_node(node_view, operation_id, operation_type)
 
 
 def parse_softmax_node(node_view):
@@ -313,8 +331,8 @@ def _parse_operation(node_view):
     node_class = node_view.node_class
     if node_class == "Gemm":
         return parse_gemm_node(node_view)
-    if node_class == "Activation":
-        return parse_relu_node(node_view)
+    if node_class in _ACTIVATION_TYPES:
+        return parse_activation_node(node_view)
     if node_class == "Softmax":
         return parse_softmax_node(node_view)
     raise UnsupportedEvaluation(

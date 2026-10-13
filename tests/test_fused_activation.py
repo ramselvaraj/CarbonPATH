@@ -310,7 +310,7 @@ class FusedActivationTests(unittest.TestCase):
             self._fusion_params(),
             rng=random.Random(0),
             default_movement_policy=self.profile.movement_policy,
-            allow_fusion=True,
+            fusion_types=("relu",),
         )
         self.assertEqual(move, "relu_fusion")
         self.assertEqual(fused, self.architecture)
@@ -326,7 +326,7 @@ class FusedActivationTests(unittest.TestCase):
             self._fusion_params(),
             rng=random.Random(0),
             default_movement_policy=self.profile.movement_policy,
-            allow_fusion=True,
+            fusion_types=("relu",),
         )
         index = next(i for i in RELU_INDEXES if not back.is_fused(i))
         self.assertEqual(back.operations[index].endpoint_kind, "fpga")
@@ -355,7 +355,7 @@ class FusedActivationTests(unittest.TestCase):
                 self._fusion_params(),
                 rng=random.Random(0),
                 default_movement_policy=self.profile.movement_policy,
-                allow_fusion=True,
+                fusion_types=("relu",),
             )
 
     def test_handoff_move_does_not_change_a_fused_handoff(self):

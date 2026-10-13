@@ -230,6 +230,22 @@ The trace DataFrame returned in ATLAS mode carries
 `cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json`.
 `system/utils/DesignPointFile.py` is the only code that knows its layout.
 
+### Activation types
+
+`system/utils/AtlasGraphAdapter.py` has the lists of operation types.
+
+- `SIMPLE_ACTIVATIONS`: `relu`, `leaky_relu`, `thresholded_relu`. Each can run
+  on the FPGA or fused on the SAs of its GEMM.
+- `TABLE_ACTIVATIONS`: `sigmoid`, `tanh`. They run on the FPGA only, and only
+  the rule4ml evaluators (`rule4ml_fpga_<type>_v1`) estimate them.
+- A new simple activation is one entry in `SIMPLE_ACTIVATIONS` and one entry
+  in `_ACTIVATION_TYPES`. Its evaluators (`legacy_fpga_<type>_v1`,
+  `sa_fused_<type>_v1`, `rule4ml_fpga_<type>_v1`, `rule4ml_hybrid_<type>_v1`)
+  are then registered from the lists.
+- `cfg/profiles/atlas_fused_activations_v1.json` and
+  `cfg/profiles/rule4ml_fused_activations_v1.json` name an evaluator for each
+  type.
+
 ### Fused ReLU
 
 `system/utils/FusedActivation.py` owns the fused ReLU: the movement policy
@@ -301,6 +317,7 @@ Tests are under `tests/` and run through unittest discovery. The main groups are
 - `test_atlas_annealing_moves.py`: modular mutation and the one-SA/one-FPGA invariant.
 - `test_atlas_annealing.py`: seeded modular annealing selects a good profile.
 - `test_fused_activation.py`: fused ReLU mapping, evaluation, and search move.
+- `test_activation_types.py`: parsing, evaluation, and fusion of the other activation types.
 
 ## Current Caveats
 

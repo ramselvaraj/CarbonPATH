@@ -193,13 +193,17 @@ class LegacyReluInput:
 
 
 class LegacyReluInputAdapter(OperationInputAdapter):
-    """Input adapter for the legacy resource-derived FPGA ReLU model."""
+    """Input adapter for the legacy resource-derived FPGA ReLU model.
 
-    input_adapter_id = "legacy_fpga_relu_input_v1"
-    operation_type = "relu"
+    ``operation_type`` selects another simple activation that uses this model.
+    """
+
+    def __init__(self, operation_type="relu"):
+        self.operation_type = operation_type
+        self.input_adapter_id = f"legacy_fpga_{operation_type}_input_v1"
 
     def build_input(self, operation, access_plan):
-        if operation.operation_type != "relu":
+        if operation.operation_type != self.operation_type:
             raise UnsupportedEvaluation(
                 f"LegacyReluInputAdapter cannot read "
                 f"'{operation.operation_type}' operation "
@@ -217,14 +221,16 @@ class FpgaReluEvaluator(OperationEvaluator):
     Wraps the resource-derived ReLU compute estimator. It returns only compute
     latency and dynamic energy; tensor movement is owned by the tensor movement
     service and the executor owns assignment and residency.
+
+    ``operation_type`` selects another simple activation. It uses the ReLU lane
+    model and the ``relu_implementation`` of the FPGA: an assumed rate.
     """
 
-    evaluator_id = "legacy_fpga_relu_v1"
-    operation_type = "relu"
-    input_adapter_id = "legacy_fpga_relu_input_v1"
-
-    def __init__(self, compute_estimator=None):
+    def __init__(self, compute_estimator=None, operation_type="relu"):
         self.compute_estimator = compute_estimator or ReluComputeEstimator()
+        self.operation_type = operation_type
+        self.evaluator_id = f"legacy_fpga_{operation_type}_v1"
+        self.input_adapter_id = f"legacy_fpga_{operation_type}_input_v1"
 
     def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
         fpga = context.system.fpga_chiplet_dict.get(assignment.endpoint_id)

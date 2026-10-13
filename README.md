@@ -305,6 +305,12 @@ search. With `cfg/examples/sa_only_architecture.json`, which has no FPGA, each
 ReLU starts fused. The fused ReLU has no latency, energy, area, or power cost
 now; see `docs/assumed_rates_inventory.md`.
 
+Leaky ReLU and thresholded ReLU can be fused in the same way. Sigmoid and tanh
+run on the FPGA with the rule4ml evaluators. The profiles
+`cfg/profiles/atlas_fused_activations_v1.json` and
+`cfg/profiles/rule4ml_fused_activations_v1.json` name an evaluator for each
+type, and `cfg/examples/atlas/dense_activations.graph_dump.json` has all four.
+
 A placeholder policy catalog
 (`cfg/profiles/placeholders/`, `system/utils/PlaceholderPolicies.py`) supplies
 deliberately bad movement, transfer, and GEMM policies so the annealer can be
