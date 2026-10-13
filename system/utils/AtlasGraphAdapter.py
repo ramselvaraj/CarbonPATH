@@ -22,11 +22,12 @@ from types import MappingProxyType
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
-#: Elementwise activations made of simple logic. Each one can be fused with
-#: the GEMM directly before it.
+#: Elementwise activations made of simple logic.
 SIMPLE_ACTIVATIONS = ("relu", "leaky_relu", "thresholded_relu")
-#: Elementwise activations that use a lookup table. They run on an FPGA.
+#: Elementwise activations that use a lookup table.
 TABLE_ACTIVATIONS = ("sigmoid", "tanh")
+#: Elementwise activations that can be fused with the GEMM directly before them.
+FUSABLE_ACTIVATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS
 #: Every operation type that an FPGA endpoint runs.
 FPGA_OPERATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + ("softmax",)
 SUPPORTED_OPERATION_TYPES = ("gemm",) + FPGA_OPERATIONS

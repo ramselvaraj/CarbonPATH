@@ -5,11 +5,16 @@ Fusion is a property of one GEMM -> activation handoff. The movement policy
 is, so the tensor does not move. The executor reads ``fuses_consumer`` and
 makes the GEMM the producer of the next handoff.
 
-Each simple activation has a fused evaluator, ``sa_fused_<type>_v1``. An
+Each fusable activation has a fused evaluator, ``sa_fused_<type>_v1``. An
 evaluation profile names it with the key ``<type>@sa``, for example
-``relu@sa``. Its latency and energy come from the evaluator settings. The
-default of each is zero, and the systolic array gets no area or power for the
-activation hardware: these are assumed rates, not hardware characterizations.
+``relu@sa``. Its latency and energy come from the evaluator settings:
+
+* ``latency_ns``              latency of one fused operation; default ``0.0``.
+* ``latency_ns_per_element``  latency for each tensor element; default ``0.0``.
+* ``energy_per_element_pj``   energy for each tensor element; default ``0.0``.
+
+The systolic array gets no area or power for the activation hardware. The
+settings are assumed rates, not hardware characterizations.
 """
 
 from __future__ import annotations
@@ -47,7 +52,7 @@ def fusion_types(profile):
         if fused_evaluator_key(operation_type) in profile.evaluators
     )
 
-_SETTINGS = ("latency_ns", "energy_per_element_pj")
+_SETTINGS = ("latency_ns", "latency_ns_per_element", "energy_per_element_pj")
 
 
 class FusedSaActivationService:
@@ -68,8 +73,9 @@ class FusedSaActivationService:
             or consumer.operation_type not in FUSABLE_OPERATIONS
         ):
             raise UnsupportedEvaluation(
-                f"movement policy '{self.policy_id}' fuses a simple activation "
-                f"with the GEMM directly before it, not {producer.operation_type}->"
+                f"movement policy '{self.policy_id}' fuses an elementwise "
+                f"activation with the GEMM directly before it, not "
+                f"{producer.operation_type}->"
                 f"{consumer.operation_type}"
             )
         if (
@@ -123,8 +129,9 @@ class SaFusedReluInputAdapter(OperationInputAdapter):
 class SaFusedReluEvaluator(OperationEvaluator):
     """Operation evaluator for an activation fused with the GEMM on its SAs.
 
-    Compute latency is the ``latency_ns`` setting. Dynamic energy is the
-    element count times the ``energy_per_element_pj`` setting.
+    Compute latency is the ``latency_ns`` setting plus the element count times
+    the ``latency_ns_per_element`` setting. Dynamic energy is the element count
+    times the ``energy_per_element_pj`` setting.
     """
 
     def __init__(self, operation_type="relu"):
@@ -157,7 +164,9 @@ class SaFusedReluEvaluator(OperationEvaluator):
         return OperationEstimate(
             operation_id=evaluator_input.operation_id,
             evaluator_id=self.evaluator_id,
-            compute_latency_ns=self._setting(settings, "latency_ns"),
+            compute_latency_ns=self._setting(settings, "latency_ns")
+            + evaluator_input.element_count
+            * self._setting(settings, "latency_ns_per_element"),
             dynamic_energy_pj=evaluator_input.element_count
             * self._setting(settings, "energy_per_element_pj"),
         )

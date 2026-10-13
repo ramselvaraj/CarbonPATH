@@ -16,7 +16,7 @@ import hashlib
 import json
 
 from system.utils.ArchitectureIdentity import effective_gemm_mapping
-from system.utils.AtlasGraphAdapter import SIMPLE_ACTIVATIONS
+from system.utils.AtlasGraphAdapter import FUSABLE_ACTIVATIONS
 from system.utils.ArchitectureModel import validate_modular_architecture
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -27,7 +27,7 @@ GEMM_TILE_ORDERS = ("ascending", "descending")
 #: The movement policy of a handoff whose consumer is fused with its GEMM.
 FUSED_ACTIVATION_POLICY = "fused_sa_activation_v1"
 #: The operation types that can be fused with the GEMM directly before them.
-FUSABLE_OPERATIONS = SIMPLE_ACTIVATIONS
+FUSABLE_OPERATIONS = FUSABLE_ACTIVATIONS
 FUSED_HANDOFF_KIND = "sa_fused"
 
 

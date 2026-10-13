@@ -1,0 +1,47 @@
+{
+    "profile": "rule4ml_fused_dummy_v0",
+    "version": 1,
+    "evaluators": {
+        "gemm": "legacy_scale_sim_gemm_v1",
+        "relu": {
+            "id": "rule4ml_fpga_relu_v1",
+            "settings": {}
+        },
+        "relu@sa": {
+            "id": "sa_fused_relu_v1",
+            "settings": {
+                "latency_ns_per_element": 0.01,
+                "energy_per_element_pj": 0.05
+            }
+        },
+        "sigmoid": {
+            "id": "rule4ml_fpga_sigmoid_v1",
+            "settings": {}
+        },
+        "sigmoid@sa": {
+            "id": "sa_fused_sigmoid_v1",
+            "settings": {
+                "latency_ns_per_element": 0.1,
+                "energy_per_element_pj": 0.5
+            }
+        },
+        "tanh": {
+            "id": "rule4ml_fpga_tanh_v1",
+            "settings": {}
+        },
+        "tanh@sa": {
+            "id": "sa_fused_tanh_v1",
+            "settings": {
+                "latency_ns_per_element": 0.1,
+                "energy_per_element_pj": 0.5
+            }
+        },
+        "softmax": {
+            "id": "rule4ml_fpga_softmax_v1",
+            "settings": {}
+        }
+    },
+    "assignment_policy": "all_sas_single_fpga_v1",
+    "movement_policy": "distributed_activation_boundary_v2",
+    "transfer_model": "route_transfer_v1"
+}

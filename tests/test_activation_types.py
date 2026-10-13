@@ -12,6 +12,7 @@ from system.utils import Rule4MlEvaluators
 from system.utils.AtlasAnnealingMoves import mutate_atlas_design_point
 from system.utils.AtlasGraphAdapter import (
     FPGA_OPERATIONS,
+    FUSABLE_ACTIVATIONS,
     SIMPLE_ACTIVATIONS,
     load_atlas_graph,
     parse_atlas_graph,
@@ -30,6 +31,7 @@ from system.utils.WorkloadMapping import (
 GRAPH = Path("cfg/examples/atlas/dense_activations.graph_dump.json")
 RULE4ML_GRAPH = Path("cfg/examples/atlas/dense_rule4ml_activations.graph_dump.json")
 RULE4ML_OPS_PROFILE = Path("cfg/profiles/rule4ml_fpga_ops_v3.json")
+DUMMY_PROFILE = Path("cfg/profiles/rule4ml_fused_dummy_v0.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 PROFILE = Path("cfg/profiles/atlas_fused_activations_v1.json")
 RULE4ML_PROFILE = Path("cfg/profiles/rule4ml_fused_activations_v1.json")
@@ -169,13 +171,62 @@ class ActivationTypeTests(unittest.TestCase):
         for result in evaluation.results[1:]:
             self.assertEqual(result.movement.method, "distributed_route")
 
-    def test_only_the_simple_activations_can_be_fused(self):
-        self.assertEqual(self.mapping.fusable_indexes, (1, 3))
+    def test_profile_selects_the_activation_types_that_can_be_fused(self):
+        self.assertEqual(self.mapping.fusable_indexes, (1, 3, 5, 7))
         self.assertEqual(fusion_types(self.profile), SIMPLE_ACTIVATIONS)
+        self.assertEqual(
+            fusion_types(load_evaluation_profile(DUMMY_PROFILE)),
+            ("relu", "sigmoid", "tanh"),
+        )
+        self.assertNotIn("softmax", FUSABLE_ACTIVATIONS)
+
+    def test_softmax_cannot_be_fused(self):
+        graph = load_atlas_graph(RULE4ML_GRAPH)
+        profile = load_evaluation_profile(DUMMY_PROFILE)
+        mapping = initial_workload_mapping(
+            graph, self.architecture, profile, self.search_space
+        )
+        self.assertEqual(mapping.fusable_indexes, (1, 3, 5))
         with self.assertRaisesRegex(UnsupportedEvaluation, "cannot be fused"):
-            self.mapping.with_fusion_change(
-                5, "sa", (0,), FUSED_ACTIVATION_POLICY, "local_sram_v1"
+            mapping.with_fusion_change(
+                7, "sa", (0,), FUSED_ACTIVATION_POLICY, "local_sram_v1"
             )
+
+    def test_fused_cost_is_proportional_to_the_element_count(self):
+        graph = load_atlas_graph(RULE4ML_GRAPH)
+        profile = load_evaluation_profile(DUMMY_PROFILE)
+        mapping = initial_workload_mapping(
+            graph, self.architecture, profile, self.search_space
+        )
+        for index in (1, 3, 5):
+            mapping = mapping.with_fusion_change(
+                index, "sa", (0,), FUSED_ACTIVATION_POLICY, "local_sram_v1"
+            )
+        with patch.object(
+            Rule4MlEvaluators, "predict_activation", return_value=PREDICTION
+        ) as predict:
+            evaluation = evaluate_atlas_graph(
+                self.cache, self.architecture, graph, profile=profile, mapping=mapping
+            )
+
+        rates = {1: (0.01, 0.05), 3: (0.1, 0.5), 5: (0.1, 0.5)}
+        for index, (latency_rate, energy_rate) in rates.items():
+            result = evaluation.results[index]
+            self.assertEqual(
+                result.evaluator_id, f"sa_fused_{result.operation_type}_v1"
+            )
+            self.assertEqual(result.movement.method, "fused")
+            self.assertAlmostEqual(
+                result.compute_latency_ns, latency_rate * result.element_count
+            )
+            self.assertAlmostEqual(
+                result.compute_energy_pj, energy_rate * result.element_count
+            )
+        self.assertEqual(evaluation.results[7].endpoint_kind, "fpga")
+        self.assertEqual(
+            [call.kwargs["activation"] for call in predict.call_args_list],
+            ["softmax"],
+        )
 
     def test_fused_simple_activations_have_no_cost(self):
         mapping = self.mapping

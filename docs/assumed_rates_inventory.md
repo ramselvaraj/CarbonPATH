@@ -84,6 +84,8 @@ these tables.
 | Leaky and thresholded ReLU on the FPGA | Same lanes and energy as ReLU | `legacy_fpga_<type>_v1` in `system/utils/NonGemmEstimator.py`; reads the `relu_implementation` of the FPGA | Assumption; no implementation data for these types |
 | Leaky and thresholded ReLU in rule4ml | ReLU prediction | `RULE4ML_ACTIVATIONS` in `system/utils/Rule4MlEvaluators.py` | Assumption; rule4ml has predictors for ReLU, sigmoid, tanh, and softmax only |
 | Sigmoid and tanh energy | `0 pJ` for each element | `energy_per_element_pj` setting of `rule4ml_fpga_<type>_v1`; default in `system/utils/Rule4MlEvaluators.py` | Placeholder assumption; rule4ml gives latency only |
+| Dummy fused ReLU cost | `0.01 ns` and `0.05 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`relu@sa`) | Dummy values; no source |
+| Dummy fused sigmoid and tanh cost | `0.1 ns` and `0.5 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`sigmoid@sa`, `tanh@sa`) | Dummy values; no source. The lookup table adds no area or power to the SA |
 | Fused ReLU area and power | `0` added to the SA | Not modeled; `get_area_power` in `chiplet/n_utils.py` is unchanged | Placeholder assumption; fusion has no hardware cost |
 | Calibration sample count | `10` | `network.py:433` | Hardcoded operational assumption |
 | Default cost profile | `t1` | `network.py:408` | Behavioral default, not a physical rate |

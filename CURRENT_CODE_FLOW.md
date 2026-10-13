@@ -234,10 +234,14 @@ The trace DataFrame returned in ATLAS mode carries
 
 `system/utils/AtlasGraphAdapter.py` has the lists of operation types.
 
-- `SIMPLE_ACTIVATIONS`: `relu`, `leaky_relu`, `thresholded_relu`. Each can run
-  on the FPGA or fused on the SAs of its GEMM.
-- `TABLE_ACTIVATIONS`: `sigmoid`, `tanh`. They run on the FPGA only, and only
-  the rule4ml evaluators (`rule4ml_fpga_<type>_v1`) estimate them.
+- `SIMPLE_ACTIVATIONS`: `relu`, `leaky_relu`, `thresholded_relu`.
+- `TABLE_ACTIVATIONS`: `sigmoid`, `tanh`. On the FPGA, only the rule4ml
+  evaluators (`rule4ml_fpga_<type>_v1`) estimate them.
+- `FUSABLE_ACTIVATIONS`: the two lists together. Each can run on the FPGA or
+  fused on the SAs of its GEMM. Softmax cannot be fused.
+- `cfg/profiles/rule4ml_fused_dummy_v0.json` gives the fused ReLU, sigmoid,
+  and tanh a dummy cost for each tensor element. The values are not hardware
+  data.
 - A new simple activation is one entry in `SIMPLE_ACTIVATIONS` and one entry
   in `_ACTIVATION_TYPES`. Its evaluators (`legacy_fpga_<type>_v1`,
   `sa_fused_<type>_v1`, `rule4ml_fpga_<type>_v1`, `rule4ml_hybrid_<type>_v1`)
