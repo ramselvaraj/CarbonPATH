@@ -1,0 +1,683 @@
+[
+  {
+    "index": 1,
+    "name": "input_layer",
+    "class": "Input",
+    "inputs": [
+      {
+        "name": "input",
+        "shape": null,
+        "precision": "?"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        128
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "input_layer",
+      "class_name": "InputLayer"
+    }
+  },
+  {
+    "index": 2,
+    "name": "gemm_L0",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "input_layer",
+        "shape": [
+          128,
+          128
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        2048
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight2",
+        "shape": [
+          2048,
+          128
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias2",
+        "shape": [
+          2048
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 128,
+      "n_out": 2048,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 3,
+    "name": "L0_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L0",
+        "shape": [
+          128,
+          2048
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        2048
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 262144
+    }
+  },
+  {
+    "index": 4,
+    "name": "gemm_L1",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L0_relu",
+        "shape": [
+          128,
+          2048
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight4",
+        "shape": [
+          1024,
+          2048
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias4",
+        "shape": [
+          1024
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 2048,
+      "n_out": 1024,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 5,
+    "name": "L1_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L1",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 131072
+    }
+  },
+  {
+    "index": 6,
+    "name": "gemm_L2",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L1_relu",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight6",
+        "shape": [
+          1024,
+          1024
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias6",
+        "shape": [
+          1024
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 1024,
+      "n_out": 1024,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 7,
+    "name": "L2_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L2",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        1024
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 131072
+    }
+  },
+  {
+    "index": 8,
+    "name": "gemm_L3",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L2_relu",
+        "shape": [
+          128,
+          1024
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight8",
+        "shape": [
+          512,
+          1024
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias8",
+        "shape": [
+          512
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 1024,
+      "n_out": 512,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 9,
+    "name": "L3_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L3",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 65536
+    }
+  },
+  {
+    "index": 10,
+    "name": "gemm_L4",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L3_relu",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight10",
+        "shape": [
+          512,
+          512
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias10",
+        "shape": [
+          512
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 512,
+      "n_out": 512,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 11,
+    "name": "L4_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L4",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        512
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 65536
+    }
+  },
+  {
+    "index": 12,
+    "name": "gemm_L5",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L4_relu",
+        "shape": [
+          128,
+          512
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight12",
+        "shape": [
+          256,
+          512
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias12",
+        "shape": [
+          256
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 512,
+      "n_out": 256,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 13,
+    "name": "L5_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L5",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 32768
+    }
+  },
+  {
+    "index": 14,
+    "name": "gemm_L6",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L5_relu",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight14",
+        "shape": [
+          256,
+          256
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias14",
+        "shape": [
+          256
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 256,
+      "n_out": 256,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 15,
+    "name": "L6_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L6",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        256
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 32768
+    }
+  },
+  {
+    "index": 16,
+    "name": "gemm_L7",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L6_relu",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        128
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight16",
+        "shape": [
+          128,
+          256
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias16",
+        "shape": [
+          128
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 256,
+      "n_out": 128,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  },
+  {
+    "index": 17,
+    "name": "L7_relu",
+    "class": "Activation",
+    "inputs": [
+      {
+        "name": "L7",
+        "shape": [
+          128,
+          128
+        ],
+        "precision": "fixed<16,9,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        128
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "activation": "relu",
+      "n_in": 16384
+    }
+  },
+  {
+    "index": 18,
+    "name": "gemm_L8",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "L7_relu",
+        "shape": [
+          128,
+          128
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        128,
+        64
+      ],
+      "precision": "fixed<16,9,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight18",
+        "shape": [
+          64,
+          128
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "0"
+      },
+      {
+        "name": "bias18",
+        "shape": [
+          64
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "0"
+      }
+    ],
+    "attrs": {
+      "weights_in_core": true,
+      "n_in": 128,
+      "n_out": 64,
+      "n_patches": 128,
+      "gemm_m": 128,
+      "_original_type": "Dense"
+    }
+  }
+]

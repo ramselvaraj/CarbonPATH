@@ -53,8 +53,20 @@ from system.utils.OperationEvaluator import (
     OperationEvaluator,
     OperationInputAdapter,
 )
-from system.utils.OperationPlacement import build_placement_policy
-from system.utils.TensorMovement import TensorResidency, build_movement_service
+from system.utils.OperationAssignment import (
+    EndpointAssignment,
+    build_assignment_policy,
+)
+from system.utils.WorkloadMapping import initial_workload_mapping
+from system.utils.DesignPointFile import (
+    check_design_point_workload,
+    design_point_document,
+    profile_differs,
+    read_design_point,
+)
+from system.utils.FpgaActivationMovement import register_fpga_activation_movement
+from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
+from system.utils.TensorMovement import MovementRequest, build_movement_service
 from system.utils.TransferEstimator import build_transfer_cost_model
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from system.utils.AtlasObjective import (
@@ -63,7 +75,6 @@ from system.utils.AtlasObjective import (
     build_atlas_objective,
 )
 from system.utils.AtlasAnnealingMoves import (
-    candidate_profile_paths,
     mutate_atlas_design_point,
     sequential_gemm_search_space,
     validate_atlas_architecture,
@@ -78,6 +89,7 @@ from config import calibration_mode, print_info, fast_test, latency_en, sram_sel
 # sees them. Evaluator registration happens in build_default_evaluator_registry.
 # DELETE-ME with system/utils/PlaceholderPolicies.py.
 register_placeholder_policies()
+register_fpga_activation_movement()
 
 
 #########
@@ -154,22 +166,12 @@ def _load_json_file(path):
         return json.load(file)
 
 
-def _dump_best_profile(result_df, run_name):
-    """Persist the best modular evaluation profile beside the best architecture."""
-    best_profile = result_df.attrs.get("best_profile")
-    if not best_profile:
-        return
-    rundir = os.path.join("cfg", "gen_arch", run_name)
-    os.makedirs(rundir, exist_ok=True)
-    path = os.path.join(rundir, "best_profile.json")
-    with open(path, "w", encoding="utf-8") as file:
-        json.dump(best_profile, file, indent=2)
-    print(f"[INFO] Best evaluation profile written to {path}")
-
-
-def build_scheduler_system(workload, arch_dict):
+def build_scheduler_system(workload, arch_dict, sa_ids=None):
 
     system = ChipletSystem(arch_dict=arch_dict, BASE_FREQUENCY=FREQUENCY)
+    if sa_ids is not None:
+        # The GEMM runs on these SAs only. Routes still use the full package.
+        system.core_dict = {sa_id: system.core_dict[sa_id] for sa_id in sa_ids}
     scheduler = Scheduler(workload, system.core_dict.values(), mapping_dict=arch_dict['WL_mapping']['mapping'])
     scheduler.static_workload_scheduling()
 
@@ -177,9 +179,9 @@ def build_scheduler_system(workload, arch_dict):
 
 
 
-def prepare_single_gemm(cache: SimulationCache, arch_dict: dict, shape):
+def prepare_single_gemm(cache: SimulationCache, arch_dict: dict, shape, sa_ids=None):
     wl = GEMMWorkload(*shape)
-    scheduler, system = build_scheduler_system(wl, arch_dict)
+    scheduler, system = build_scheduler_system(wl, arch_dict, sa_ids=sa_ids)
     cache.all_cores_simulation_with_cache(scheduler.systolic_arrays)
     return scheduler, system
 
@@ -191,8 +193,11 @@ def simulate_single_gemm(
     prepared=None,
     activation_from_dram=True,
     output_to_dram=True,
+    sa_ids=None,
 ):
-    scheduler, system = prepared or prepare_single_gemm(cache, arch_dict, shape)
+    scheduler, system = prepared or prepare_single_gemm(
+        cache, arch_dict, shape, sa_ids=sa_ids
+    )
     latency_ns, energy_pj = scheduler.system_modeling(
         system,
         activation_from_dram=activation_from_dram,
@@ -346,7 +351,10 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
     def _configured_architecture(architecture, settings):
         if not settings:
             return architecture
-        unknown = sorted(set(settings) - {"dataflow", "split_k", "assignment_order"})
+        unknown = sorted(
+            set(settings)
+            - {"dataflow", "split_k", "assignment_order", "merge_tiles"}
+        )
         if unknown:
             raise UnsupportedEvaluation(
                 "unsupported GEMM evaluator setting(s): " + ", ".join(unknown)
@@ -372,13 +380,29 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
             mapping["assign_workload_in_ascending_order"] = int(
                 assignment_order == "ascending"
             )
+        if "merge_tiles" in settings:
+            merge_tiles = settings["merge_tiles"]
+            if not isinstance(merge_tiles, bool):
+                raise UnsupportedEvaluation("GEMM merge_tiles must be boolean")
+            mapping["merge_tiles"] = int(merge_tiles)
         return architecture
 
-    def prepare(self, evaluator_input, placement, context):
-        if placement.endpoint_ids != context.system.sa_endpoint_group.endpoint_ids:
+    @staticmethod
+    def _sa_subset(assignment, context):
+        """Return the keyword that limits the GEMM to its assigned SAs."""
+        sa_group = context.system.sa_endpoint_group.endpoint_ids
+        if assignment.endpoint_ids == sa_group:
+            return {}
+        if assignment.endpoint_kind != "sa" or not set(
+            assignment.endpoint_ids
+        ) <= set(sa_group):
             raise UnsupportedEvaluation(
-                "the CarbonPATH GEMM evaluator requires placement on the complete SA group"
+                "the CarbonPATH GEMM evaluator requires assignment on systolic arrays"
             )
+        return {"sa_ids": assignment.endpoint_ids}
+
+    def prepare(self, evaluator_input, assignment, context):
+        sa_subset = self._sa_subset(assignment, context)
         architecture = self._configured_architecture(
             context.architecture, context.evaluator_settings
         )
@@ -386,13 +410,11 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
             context.cache,
             architecture,
             (evaluator_input.m, evaluator_input.k, evaluator_input.n),
+            **sa_subset,
         )
 
-    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
-        if placement.endpoint_ids != context.system.sa_endpoint_group.endpoint_ids:
-            raise UnsupportedEvaluation(
-                "the CarbonPATH GEMM evaluator requires placement on the complete SA group"
-            )
+    def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
+        sa_subset = self._sa_subset(assignment, context)
         architecture = self._configured_architecture(
             context.architecture, context.evaluator_settings
         )
@@ -403,6 +425,7 @@ class LegacyScaleSimGemmEvaluator(OperationEvaluator):
             prepared=context.prepared_operation,
             activation_from_dram=evaluator_input.activation_from_dram,
             output_to_dram=evaluator_input.output_to_dram,
+            **sa_subset,
         )
         dynamic_energy_pj = (
             result["dram_interconnect_energy_pj"] + result["sram_energy_pj"]
@@ -433,6 +456,7 @@ def build_default_evaluator_registry():
         PlaceholderSoftmaxEvaluator(), PlaceholderSoftmaxInputAdapter()
     )
     register_placeholder_policies(registry)
+    register_rule4ml_evaluators(registry)
     return registry
 
 
@@ -517,12 +541,17 @@ def evaluate_atlas_graph(
     profile=None,
     transfer_model=None,
     registry=None,
+    mapping=None,
 ):
     """Evaluate a direct ATLAS graph on a chiplet architecture.
 
-    The executor owns operation order, operation placement, tensor residency,
+    The executor owns operation order, operation assignment, tensor residency,
     tensor movement, and aggregation. Evaluators own only compute latency and
     dynamic energy, chosen by the evaluation profile per operation type.
+
+    The workload mapping gives the endpoints and GEMM settings of each
+    operation and the movement policy of each handoff. Without one, every
+    operation uses the profile's assignment policy and movement policy.
     """
     profile = profile or load_evaluation_profile()
     transfer_model = (
@@ -531,17 +560,47 @@ def evaluate_atlas_graph(
         else arch_dict.get("transfer_model", {})
     )
     system = ChipletSystem(arch_dict=arch_dict, BASE_FREQUENCY=FREQUENCY)
-    placement_policy = build_placement_policy(profile.placement_policy, system)
-    movement_service = build_movement_service(
-        profile.movement_policy, build_transfer_cost_model(profile.transfer_model)
-    )
+    assignment_policy = build_assignment_policy(profile.assignment_policy, system)
+    transfer_cost_model = build_transfer_cost_model(profile.transfer_model)
+    movement_services = {}
+
+    def movement_service_for(handoff_index):
+        policy_id = (
+            profile.movement_policy
+            if mapping is None
+            else mapping.handoffs[handoff_index - 1]
+        )
+        if policy_id not in movement_services:
+            movement_services[policy_id] = build_movement_service(
+                policy_id, transfer_cost_model
+            )
+        return movement_services[policy_id]
+
     registry = registry or build_default_evaluator_registry()
 
     operations = graph.operations
+    if mapping is not None and tuple(
+        mapped.operation_id for mapped in mapping.operations
+    ) != tuple(operation.operation_id for operation in operations):
+        raise UnsupportedEvaluation(
+            "workload mapping does not match the operations of the graph"
+        )
     planned = []
     for index, operation in enumerate(operations):
-        placement = placement_policy.endpoint_for(operation.operation_type)
-        access_plan = TensorAccessPlan(
+        evaluator_settings = profile.evaluator_settings_for(operation.operation_type)
+        if mapping is None:
+            assignment = assignment_policy.endpoint_for(operation.operation_type)
+        else:
+            mapped = mapping.operations[index]
+            unknown = set(mapped.endpoint_ids) - set(system.endpoint_dict)
+            if unknown:
+                raise UnsupportedEvaluation(
+                    f"operation '{operation.operation_id}' is mapped to a missing "
+                    "endpoint"
+                )
+            assignment = EndpointAssignment(mapped.endpoint_ids, mapped.endpoint_kind)
+            evaluator_settings.update(mapped.evaluator_settings())
+        provisional_access = TensorAccessPlan(
             activation_from_dram=(index == 0),
             output_to_dram=(index == len(operations) - 1),
         )
@@ -550,62 +609,52 @@ def evaluate_atlas_graph(
             cache=cache,
             architecture=arch_dict,
             system=system,
-            evaluator_settings=profile.evaluator_settings_for(
-                operation.operation_type
-            ),
-            activation_from_dram=access_plan.activation_from_dram,
-            output_to_dram=access_plan.output_to_dram,
+            evaluator_settings=evaluator_settings,
+            activation_from_dram=provisional_access.activation_from_dram,
+            output_to_dram=provisional_access.output_to_dram,
         )
-        prepared = None
-        if getattr(movement_service, "requires_prepared_operations", False):
-            prepared = binding.prepare(operation, access_plan, placement, context)
+        prepared = binding.prepare(operation, provisional_access, assignment, context)
         planned.append(
             {
                 "operation": operation,
-                "placement": placement,
+                "assignment": assignment,
                 "binding": binding,
                 "context": context,
                 "prepared": prepared,
             }
         )
 
-    mapped_movements = [None] * len(planned)
-    if getattr(movement_service, "requires_prepared_operations", False):
-        for index in range(1, len(planned)):
-            producer = planned[index - 1]
-            consumer = planned[index]
-            mapped_movements[index] = movement_service.move_between(
-                boundary_index=index,
+    movement_plans = [None] * len(planned)
+    for index in range(1, len(planned)):
+        producer = planned[index - 1]
+        consumer = planned[index]
+        movement_plans[index] = movement_service_for(index).plan(
+            MovementRequest(
+                handoff_index=index,
+                tensor_id=producer["operation"].output_tensor_id,
+                tensor_shape=producer["operation"].output_tensor.shape,
                 producer_operation=producer["operation"],
                 consumer_operation=consumer["operation"],
+                producer_assignment=producer["assignment"],
+                consumer_assignment=consumer["assignment"],
                 producer_prepared=producer["prepared"],
                 consumer_prepared=consumer["prepared"],
-            )
-
-    results = []
-    residency = None
-
-    for index, item in enumerate(planned):
-        operation = item["operation"]
-        placement = item["placement"]
-
-        movement = mapped_movements[index]
-        if residency is not None and not getattr(
-            movement_service, "requires_prepared_operations", False
-        ):
-            movement = movement_service.move(
-                tensor_id=residency.tensor_id,
-                element_count=residency.element_count,
-                source_endpoint=residency.endpoint_ids,
-                destination_endpoint=placement.endpoint_ids,
                 system=system,
                 transfer_model=transfer_model,
             )
+        )
 
+    results = []
+
+    for index, item in enumerate(planned):
+        operation = item["operation"]
+        assignment = item["assignment"]
+
+        movement = movement_plans[index]
         incoming_uses_dram = movement is not None and getattr(
             movement, "uses_dram", False
         )
-        outgoing = mapped_movements[index + 1] if index + 1 < len(planned) else None
+        outgoing = movement_plans[index + 1] if index + 1 < len(planned) else None
         outgoing_uses_dram = outgoing is not None and getattr(
             outgoing, "uses_dram", False
         )
@@ -618,7 +667,7 @@ def evaluate_atlas_graph(
         context.activation_from_dram = access_plan.activation_from_dram
         context.output_to_dram = access_plan.output_to_dram
         estimate = item["binding"].estimate(
-            operation, access_plan, placement, context
+            operation, access_plan, assignment, context
         )
 
         shape = operation.gemm_shape if operation.operation_type == "gemm" else None
@@ -627,8 +676,8 @@ def evaluate_atlas_graph(
                 index=index + 1,
                 operation_id=operation.operation_id,
                 operation_type=operation.operation_type,
-                endpoint_ids=placement.endpoint_ids,
-                endpoint_kind=placement.endpoint_kind,
+                endpoint_ids=assignment.endpoint_ids,
+                endpoint_kind=assignment.endpoint_kind,
                 evaluator_id=estimate.evaluator_id,
                 m=shape[0] if shape else None,
                 k=shape[1] if shape else None,
@@ -643,12 +692,6 @@ def evaluate_atlas_graph(
                     estimate.reduction_communication_energy_pj
                 ),
             )
-        )
-        residency = TensorResidency(
-            tensor_id=operation.output_tensor_id,
-            endpoint_ids=placement.endpoint_ids,
-            endpoint_kind=placement.endpoint_kind,
-            element_count=operation.element_count,
         )
 
     return AtlasEvaluation(
@@ -681,6 +724,7 @@ def evaluate_atlas_design_point(
     profile,
     objective,
     registry=None,
+    mapping=None,
 ):
     """Evaluate one modular design point and score it.
 
@@ -695,6 +739,7 @@ def evaluate_atlas_design_point(
         profile=profile,
         transfer_model=architecture.get("transfer_model", {}),
         registry=registry,
+        mapping=mapping,
     )
     power_w, area_mm2, cost_usd = calculate_system_metrics(system_dict=architecture)
     latency_ns = evaluation.latency_ns
@@ -708,8 +753,15 @@ def evaluate_atlas_design_point(
         energy_comm=movement_energy_pj,
         lifetime_years=3,
     )
+    movement_policies = (
+        {profile.movement_policy} if mapping is None else set(mapping.handoffs)
+    ) or {profile.movement_policy}
     diagnostics = {
-        "intermediate_policy_requested": profile.movement_policy.removesuffix("_v1")
+        "intermediate_policy_requested": (
+            movement_policies.pop().removesuffix("_v1")
+            if len(movement_policies) == 1
+            else "mixed"
+        )
     }
     boundary_plans = [
         result.movement
@@ -1332,8 +1384,7 @@ def run_policy_comparison(
 ):
     if architecture_file is None:
         raise ValueError("--architecture_file is required for run_policy_compare")
-    with open(architecture_file) as file:
-        architecture = json.load(file)
+    architecture = read_design_point(architecture_file).architecture
     calibration_file = f"cfg/calibration/calibration_{wl_idx}.json"
     if not os.path.exists(calibration_file):
         raise FileNotFoundError(
@@ -1355,7 +1406,6 @@ def run_policy_comparison(
     rows = []
     for policy in (
         "cold_dram",
-        "ideal_on_chip",
         "local_sram",
         "direct_forward",
     ):
@@ -1411,7 +1461,6 @@ def _run_modular_annealing(
     profile,
     search_space,
     objective,
-    candidate_profiles,
     initial_temp,
     freezing_temp,
     max_move_per_temp_step,
@@ -1420,47 +1469,56 @@ def _run_modular_annealing(
     level_callback,
     max_total_moves,
     registry,
+    initial_mapping=None,
 ):
-    """Adapt an ATLAS design point to the domain-independent annealer."""
+    """Adapt an ATLAS design point to the domain-independent annealer.
+
+    A design point is ``(architecture, workload mapping)``. The evaluation
+    profile stays constant for the run.
+    """
     proposals = []
+    if initial_mapping is None:
+        initial_mapping = initial_workload_mapping(
+            graph, architecture, profile, search_space
+        )
 
     def identity(design):
-        design_architecture, design_profile = design
+        design_architecture, design_mapping = design
         return (
             architecture_fingerprint(design_architecture),
-            design_profile.fingerprint(),
+            design_mapping.fingerprint(),
         )
 
     def propose(design, rng):
-        current_architecture, current_profile = design
+        current_architecture, current_mapping = design
         try:
-            moved_architecture, moved_profile, move = mutate_atlas_design_point(
+            moved_architecture, moved_mapping, move = mutate_atlas_design_point(
                 current_architecture,
-                current_profile,
+                current_mapping,
                 search_space,
-                candidate_profiles,
                 rng=rng,
             )
         except UnsupportedEvaluation:
             proposals.append(None)
             raise
-        candidate = (moved_architecture, moved_profile)
+        candidate = (moved_architecture, moved_mapping)
         proposals.append(candidate)
         return candidate, move
 
     def evaluate(design):
-        design_architecture, design_profile = design
+        design_architecture, design_mapping = design
         return evaluate_atlas_design_point(
             cache,
             design_architecture,
             graph,
-            design_profile,
+            profile,
             objective,
             registry=registry,
+            mapping=design_mapping,
         )
 
     result = anneal(
-        initial_design=(architecture, profile),
+        initial_design=(architecture, initial_mapping),
         propose=propose,
         evaluate=evaluate,
         identity=identity,
@@ -1479,7 +1537,7 @@ def _run_modular_annealing(
     architecture_rows = []
     for generic_row, candidate in zip(result.trace, proposals):
         evaluation = generic_row.get("candidate_evaluation")
-        candidate_profile = candidate[1] if candidate is not None else None
+        candidate_mapping = candidate[1] if candidate is not None else None
         candidate_architecture = candidate[0] if candidate is not None else None
         row = {
             "temperature": generic_row["temperature"],
@@ -1508,27 +1566,39 @@ def _run_modular_annealing(
             row.update(
                 {
                     "atlas_objective": generic_row["candidate_cost"],
-                    "profile_name": candidate_profile.name,
-                    "profile_fingerprint": candidate_profile.fingerprint(),
+                    "profile_name": profile.name,
+                    "profile_fingerprint": profile.fingerprint(),
+                    "mapping_fingerprint": candidate_mapping.fingerprint(),
                 }
             )
             row.update(evaluation.raw_dict())
         trace_rows.append(row)
-        architecture_rows.append(
-            process_iteration_wide(
-                candidate_architecture,
-                iteration_id=generic_row["attempt"],
+        if evaluation is not None:
+            architecture_rows.append(
+                process_iteration_wide(
+                    candidate_architecture,
+                    iteration_id=generic_row["attempt"],
+                )
             )
-        )
 
     cache.dump_cache()
     trace = pd.DataFrame(trace_rows)
-    best_architecture, best_profile = result.best_design
+    best_architecture, best_mapping = result.best_design
+    # Readers of best_profile expect the GEMM settings in the profile. They are
+    # there when every GEMM of the best mapping uses the same settings.
+    best_profile = profile
+    for setting, value in (best_mapping.shared_gemm_settings() or {}).items():
+        if setting != "merge_tiles":
+            best_profile = best_profile.with_evaluator_setting(
+                "gemm", setting, value
+            )
     trace.attrs["atlas"] = True
     trace.attrs["best_profile"] = best_profile.canonical_dict()
     trace.attrs["best_profile_fingerprint"] = best_profile.fingerprint()
-    trace.attrs["candidate_profiles"] = tuple(
-        candidate.name for candidate in candidate_profiles
+    trace.attrs["best_workload_mapping"] = best_mapping.canonical_dict()
+    trace.attrs["best_workload_mapping_fingerprint"] = best_mapping.fingerprint()
+    trace.attrs["best_design_point"] = design_point_document(
+        best_architecture, best_mapping, graph, profile
     )
     return (
         result.best_cost,
@@ -1560,8 +1630,8 @@ def sim_annealing(
     atlas_profile=None,
     atlas_search_space=None,
     atlas_objective=None,
-    candidate_profiles=None,
     registry=None,
+    initial_mapping=None,
 ):
     if initial_temp <= 0:
         raise ValueError("initial_temp must be positive")
@@ -1591,9 +1661,6 @@ def sim_annealing(
             raise ValueError("atlas annealing requires an initial architecture")
         if atlas_objective is None:
             atlas_objective = build_atlas_objective()
-        candidate_profiles = tuple(candidate_profiles or ())
-        if not candidate_profiles:
-            raise ValueError("atlas annealing requires candidate profiles")
         validate_atlas_architecture(initial_architecture)
     else:
         if workload_sequence is None:
@@ -1610,7 +1677,6 @@ def sim_annealing(
         atlas_search_space = atlas_search_space or sequential_gemm_search_space(
             input_parameters
         )
-        candidate_profiles = tuple(candidate_profiles or (atlas_profile,))
 
     if random_seed is not None:
         random.seed(random_seed)
@@ -1670,7 +1736,6 @@ def sim_annealing(
         profile=atlas_profile,
         search_space=atlas_search_space,
         objective=atlas_objective,
-        candidate_profiles=candidate_profiles,
         initial_temp=initial_temp,
         freezing_temp=freezing_temp,
         max_move_per_temp_step=max_move_per_temp_step,
@@ -1679,6 +1744,7 @@ def sim_annealing(
         level_callback=level_callback,
         max_total_moves=max_total_moves,
         registry=registry,
+        initial_mapping=initial_mapping,
     )
 
 
@@ -1738,7 +1804,11 @@ if __name__ == "__main__":
         "--architecture_file",
         type=str,
         default=None,
-        help="Fixed architecture JSON used by run_policy_compare",
+        help=(
+            "Design point file, or architecture file of original CarbonPATH: "
+            "the start of ATLAS annealing, or the fixed architecture of "
+            "run_policy_compare"
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -1765,7 +1835,7 @@ if __name__ == "__main__":
         "--atlas_search_space",
         type=str,
         default="cfg/experiments/atlas_modular_search_space.json",
-        help="Modular architecture/profile search space for ATLAS annealing",
+        help="Architecture and workload-mapping search space for ATLAS annealing",
     )
     parser.add_argument(
         "--atlas_objective_config",
@@ -1827,16 +1897,11 @@ if __name__ == "__main__":
     atlas_graph = None
     atlas_profile = None
     atlas_search_space = None
-    candidate_profiles = None
     atlas_objective = None
     if atlas_mode:
         atlas_graph = load_atlas_graph(atlas_graph_path)
         atlas_profile = load_evaluation_profile(evaluation_profile_path)
         atlas_search_space = _load_json_file(atlas_search_space_path)
-        candidate_profiles = [
-            load_evaluation_profile(path)
-            for path in candidate_profile_paths(atlas_search_space)
-        ]
         atlas_objective = build_atlas_objective(
             config_path=atlas_objective_config_path
             or "cfg/parameters/atlas_objective.json"
@@ -1878,11 +1943,19 @@ if __name__ == "__main__":
         if run_mode == "run_sim_anneal": #Runs Simulated Annealing
             start_time = time.time()
             if atlas_mode:
-                initial_architecture = (
-                    _load_json_file(architecture_file)
-                    if architecture_file
-                    else None
-                )
+                initial_architecture = None
+                initial_mapping = None
+                if architecture_file:
+                    loaded = read_design_point(architecture_file)
+                    check_design_point_workload(loaded, atlas_graph)
+                    if profile_differs(loaded, atlas_profile):
+                        print(
+                            "[Warning] The design point file was scored with "
+                            f"profile '{loaded.evaluated_with.get('profile')}', "
+                            f"not with '{atlas_profile.name}'"
+                        )
+                    initial_architecture = loaded.architecture
+                    initial_mapping = loaded.mapping
                 best_cost, best_arch, sa_details_csv, sim_results_csv = sim_annealing(
                     wl_idx=None,
                     workload_sequence=None,
@@ -1900,7 +1973,7 @@ if __name__ == "__main__":
                     atlas_profile=atlas_profile,
                     atlas_search_space=atlas_search_space,
                     atlas_objective=atlas_objective,
-                    candidate_profiles=candidate_profiles,
+                    initial_mapping=initial_mapping,
                 )
             else:
                 best_cost, best_arch, sa_details_csv, sim_results_csv = sim_annealing(
@@ -1924,9 +1997,8 @@ if __name__ == "__main__":
                 best_arch,
                 best_cost,
                 iteration_run_name,
+                best_design_point=sa_details_csv.attrs.get("best_design_point"),
             )
-            if atlas_mode:
-                _dump_best_profile(sa_details_csv, iteration_run_name)
             end_time = time.time()
             find_run_time(start_time,end_time)
         elif run_mode == "run_calibration": #Runs Calibration

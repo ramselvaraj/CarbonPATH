@@ -363,7 +363,7 @@ def gemm_sequence_to_atlas_graph(workload_sequence):
 
     This is the compatibility input adapter for CarbonPATH's original workload
     format.  Evaluation still proceeds through the normal ATLAS operation,
-    placement, movement, and transfer-model interfaces.
+    assignment, movement, and transfer-model interfaces.
     """
     if not isinstance(workload_sequence, Mapping):
         raise ValueError("GEMM workload sequence must be an object")

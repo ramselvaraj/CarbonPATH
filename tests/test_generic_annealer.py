@@ -63,6 +63,39 @@ class GenericAnnealerTests(unittest.TestCase):
             [(False, False), (True, False), (True, True)],
         )
 
+    def test_candidate_evaluation_failure_is_recorded_without_state_change(self):
+        def propose(_current, _rng):
+            return "bad", "step"
+
+        def evaluate(design):
+            if design == "bad":
+                raise UnsupportedEvaluation("candidate cannot be evaluated")
+            return {"value": design}, float(design)
+
+        result = anneal(
+            initial_design=0,
+            propose=propose,
+            evaluate=evaluate,
+            identity=str,
+            rng=random.Random(1),
+            initial_temperature=2.0,
+            freezing_temperature=1.0,
+            moves_per_temperature=1,
+            cooling_rate=0.25,
+        )
+
+        row = result.trace[0]
+        self.assertTrue(row["proposal_valid"])
+        self.assertTrue(row["proposal_changed"])
+        self.assertEqual(row["acceptance_reason"], "evaluation_error")
+        self.assertFalse(row["move_accepted"])
+        self.assertIsNone(row["candidate_cost"])
+        self.assertIsNone(row["cost_diff"])
+        self.assertEqual(row["proposal_error"], "candidate cannot be evaluated")
+        self.assertEqual(result.current_design, 0)
+        self.assertEqual(result.best_design, 0)
+        self.assertEqual(result.best_cost, 0.0)
+
     def test_fixed_seed_replays_the_same_trace(self):
         def run(seed):
             def propose(current, rng):
@@ -85,7 +118,7 @@ class GenericAnnealerTests(unittest.TestCase):
         self.assertEqual(first.best_design, second.best_design)
         self.assertEqual(first.trace, second.trace)
 
-    def test_equal_best_cost_uses_canonical_identity_as_tie_breaker(self):
+    def test_equal_best_cost_keeps_the_first_best_design(self):
         result = anneal(
             initial_design="z",
             propose=lambda _current, _rng: ("a", "rename"),
@@ -98,7 +131,8 @@ class GenericAnnealerTests(unittest.TestCase):
             cooling_rate=0.25,
         )
 
-        self.assertEqual(result.best_design, "a")
+        self.assertEqual(result.current_design, "a")
+        self.assertEqual(result.best_design, "z")
 
     def test_adaptive_schedule_stops_at_the_exact_move_budget(self):
         controller = AdaptiveTemperatureController(

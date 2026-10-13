@@ -1229,7 +1229,7 @@ def accept_move_func(cost_diff, temp):
         else:
             return False, 3  # Rejected (reason code 3)
         
-def dump_results(sa_info_df, sim_result_df, best_arch, best_cost, file_run_name):
+def dump_results(sa_info_df, sim_result_df, best_arch, best_cost, file_run_name, best_design_point=None):
     import matplotlib.pyplot as plt
     from pathlib import Path
     subdir = "cfg/gen_arch"
@@ -1276,7 +1276,13 @@ def dump_results(sa_info_df, sim_result_df, best_arch, best_cost, file_run_name)
     plt.savefig(f"{rundir}/{plot_file_name}",dpi=300,bbox_inches="tight")
     
     #R write_solution_to_json(solution_data=best_arch,output_json_file='cfg/gen_arch/best-arch.json')
-    write_solution_to_json(solution_data=best_arch,output_json_file=f"{rundir}/{best_arch_file_name}")
+    if best_design_point is None:
+        write_solution_to_json(solution_data=best_arch,output_json_file=f"{rundir}/{best_arch_file_name}")
+    else:
+        # One result file: the architecture and its workload mapping.
+        design_point_file_name = f"best_design_point_{file_run_name}_{file_run_time}.json"
+        write_solution_to_json(solution_data=best_design_point,output_json_file=f"{rundir}/{design_point_file_name}")
+        print(f"[INFO] Best design point written to {rundir}/{design_point_file_name}")
     print(f"[INFO] Best arch cost is {best_cost}")
     
     return

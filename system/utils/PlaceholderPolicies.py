@@ -138,7 +138,7 @@ class SlowGemmEvaluator(OperationEvaluator):
     input_adapter_id = "placeholder_slow_gemm_input_v0"
     latency_factor = 10.0
 
-    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
+    def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
         from main import simulate_single_gemm
 
         result = simulate_single_gemm(

@@ -60,7 +60,7 @@ def _profile(policy):
             "profile": f"pointwise_{policy}_v1",
             "version": 1,
             "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
-            "placement_policy": "all_sas_single_fpga_v1",
+            "assignment_policy": "all_sas_single_fpga_v1",
             "movement_policy": f"{policy}_v1",
             "transfer_model": "route_transfer_v1",
         }

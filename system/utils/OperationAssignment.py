@@ -1,6 +1,6 @@
-"""Operation placement policies.
+"""Operation assignment policies.
 
-Operation placement assigns a graph operation to an endpoint or endpoint group.
+Operation assignment assigns a graph operation to an endpoint or endpoint group.
 It is distinct from GEMM tile mapping, which assigns the tiles of one GEMM to
 systolic arrays within its assigned SA group.
 """
@@ -13,7 +13,7 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 @dataclass(frozen=True)
-class EndpointPlacement:
+class EndpointAssignment:
     endpoint_ids: tuple[int, ...]
     endpoint_kind: str
 
@@ -24,9 +24,9 @@ class EndpointPlacement:
         else:
             endpoint_ids = tuple(endpoint_ids)
         if not endpoint_ids:
-            raise ValueError("operation placement cannot be empty")
+            raise ValueError("operation assignment cannot be empty")
         if len(set(endpoint_ids)) != len(endpoint_ids):
-            raise ValueError("operation placement cannot contain duplicates")
+            raise ValueError("operation assignment cannot contain duplicates")
         object.__setattr__(self, "endpoint_ids", endpoint_ids)
 
     @property
@@ -35,8 +35,8 @@ class EndpointPlacement:
         return self.endpoint_ids[0] if len(self.endpoint_ids) == 1 else None
 
 
-class FixedSingleSaSingleFpgaPlacement:
-    """First placement policy: one SA endpoint and one FPGA endpoint.
+class FixedSingleSaSingleFpgaAssignment:
+    """First assignment policy: one SA endpoint and one FPGA endpoint.
 
     GEMM runs on the SA; every non-GEMM operation runs on the FPGA. This
     reproduces the current behavior explicitly rather than hiding it in the
@@ -61,15 +61,15 @@ class FixedSingleSaSingleFpgaPlacement:
 
     def endpoint_for(self, operation_type):
         if operation_type == "gemm":
-            return EndpointPlacement(self.sa_id, "sa")
+            return EndpointAssignment(self.sa_id, "sa")
         if operation_type in ("relu", "softmax"):
-            return EndpointPlacement(self.fpga_id, "fpga")
+            return EndpointAssignment(self.fpga_id, "fpga")
         raise UnsupportedEvaluation(
-            f"placement policy has no endpoint for operation type '{operation_type}'"
+            f"assignment policy has no endpoint for operation type '{operation_type}'"
         )
 
 
-class AllSystolicArraysSingleFpgaPlacement:
+class AllSystolicArraysSingleFpgaAssignment:
     """Place GEMMs on every SA and supported elementwise ops on one FPGA."""
 
     policy_id = "all_sas_single_fpga_v1"
@@ -79,37 +79,37 @@ class AllSystolicArraysSingleFpgaPlacement:
         self.fpga_ids = tuple(sorted(system.fpga_chiplet_dict))
         if not self.sa_ids:
             raise UnsupportedEvaluation(
-                "all-SA placement requires at least one systolic-array endpoint"
+                "all-SA assignment requires at least one systolic-array endpoint"
             )
         if len(self.fpga_ids) > 1:
             raise UnsupportedEvaluation(
-                "all-SA placement currently supports at most one FPGA endpoint"
+                "all-SA assignment currently supports at most one FPGA endpoint"
             )
 
     def endpoint_for(self, operation_type):
         if operation_type == "gemm":
-            return EndpointPlacement(self.sa_ids, "sa")
+            return EndpointAssignment(self.sa_ids, "sa")
         if operation_type in ("relu", "softmax"):
             if not self.fpga_ids:
                 raise UnsupportedEvaluation(
                     f"operation type '{operation_type}' requires an FPGA endpoint"
                 )
-            return EndpointPlacement(self.fpga_ids, "fpga")
+            return EndpointAssignment(self.fpga_ids, "fpga")
         raise UnsupportedEvaluation(
-            f"placement policy has no endpoint for operation type '{operation_type}'"
+            f"assignment policy has no endpoint for operation type '{operation_type}'"
         )
 
 
-PLACEMENT_POLICIES = {
-    FixedSingleSaSingleFpgaPlacement.policy_id: FixedSingleSaSingleFpgaPlacement,
-    AllSystolicArraysSingleFpgaPlacement.policy_id: AllSystolicArraysSingleFpgaPlacement,
+ASSIGNMENT_POLICIES = {
+    FixedSingleSaSingleFpgaAssignment.policy_id: FixedSingleSaSingleFpgaAssignment,
+    AllSystolicArraysSingleFpgaAssignment.policy_id: AllSystolicArraysSingleFpgaAssignment,
 }
 
 
-def build_placement_policy(policy_id, system):
-    """Resolve an evaluation profile's operation placement policy ID."""
+def build_assignment_policy(policy_id, system):
+    """Resolve an evaluation profile's operation assignment policy ID."""
     try:
-        policy_class = PLACEMENT_POLICIES[policy_id]
+        policy_class = ASSIGNMENT_POLICIES[policy_id]
     except KeyError:
-        raise UnsupportedEvaluation(f"unknown placement policy '{policy_id}'")
+        raise UnsupportedEvaluation(f"unknown assignment policy '{policy_id}'")
     return policy_class(system)

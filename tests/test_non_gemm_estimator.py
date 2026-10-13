@@ -10,7 +10,7 @@ from system.utils.NonGemmEstimator import (
     ReluStageComposer,
 )
 from system.utils.OperationEvaluator import EvaluationContext
-from system.utils.OperationPlacement import EndpointPlacement
+from system.utils.OperationAssignment import EndpointAssignment
 from system.utils.TransferEstimator import ResolvedRoute
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -172,7 +172,7 @@ class FpgaReluEvaluatorTests(unittest.TestCase):
     def test_returns_compute_latency_and_dynamic_energy(self):
         estimate = FpgaReluEvaluator().evaluate(
             _relu_input(),
-            EndpointPlacement(1, "fpga"),
+            EndpointAssignment(1, "fpga"),
             self._context(_fpga(energy_per_element_pj=0.5)),
         )
         self.assertEqual(estimate.operation_id, "relu_1")
@@ -184,7 +184,7 @@ class FpgaReluEvaluatorTests(unittest.TestCase):
         with self.assertRaises(UnsupportedEvaluation):
             FpgaReluEvaluator().evaluate(
                 _relu_input(),
-                EndpointPlacement(7, "fpga"),
+                EndpointAssignment(7, "fpga"),
                 self._context(_fpga()),
             )
 
@@ -192,7 +192,7 @@ class FpgaReluEvaluatorTests(unittest.TestCase):
         with self.assertRaises(UnsupportedEvaluation):
             FpgaReluEvaluator().evaluate(
                 _relu_input(),
-                EndpointPlacement(1, "fpga"),
+                EndpointAssignment(1, "fpga"),
                 self._context(_fpga(clbs=4)),
             )
 

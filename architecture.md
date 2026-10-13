@@ -113,7 +113,7 @@ The implemented run modes are:
 | `--cost_profile` | Objective weighting profile (`t1`-`t4`) | `t1` |
 | `--run_mode` | `run_sim_anneal`, `run_calibration`, or `run_policy_compare` | `run_sim_anneal` |
 | `--intermediate_policy` | Boundary policy for ordered GEMMs | `direct_forward` |
-| `--architecture_file` | Fixed architecture required by `run_policy_compare` | none |
+| `--architecture_file` | Design point file or original architecture file: the start of ATLAS annealing, or the fixed architecture of `run_policy_compare` | none |
 
 ### GEMM Workload
 
@@ -126,8 +126,7 @@ previous N dimension.
 Sequences execute GEMMs in order with no pipelining or compute overlap. Under
 the default `direct_forward` policy, same-core slices remain in SRAM and remote
 slices use valid chiplet routes. An infeasible boundary falls back entirely to
-DRAM. Explicit policies can instead require cold DRAM, same-core SRAM retention,
-or ideal on-chip transfer. The first input and final output always access DRAM.
+DRAM. Explicit policies can instead require cold DRAM or same-core SRAM retention. The first input and final output always access DRAM.
 
 ### Design Search Space
 
@@ -309,10 +308,10 @@ reads the top-level node array and validates one linear chain of constant-weight
 ATLAS graph, an object is a legacy linear network.
 
 ATLAS graphs are evaluated by `main.evaluate_atlas_graph`, the executor. It owns
-operation order, operation placement, tensor residency, tensor movement, and
+operation order, operation assignment, tensor residency, tensor movement, and
 aggregation. It selects an operation evaluator per operation type from the
 evaluation profile and requires exactly one systolic-array endpoint and one FPGA
-endpoint for the first fixed placement policy.
+endpoint for the first fixed assignment policy.
 
 An operation evaluator returns only compute latency and dynamic energy. The
 current evaluators live behind a registry:
@@ -376,8 +375,7 @@ are assigned to the same final reduction owner used by `Scheduler`. Unsupported,
 incomplete, or unroutable mappings fall back for the whole boundary rather than
 mixing an unverified partial result with another transfer method.
 
-The supported policies are `cold_dram`, `ideal_on_chip`, `local_sram`, and
-`direct_forward`. The first input and final output remain DRAM
+The supported policies are `cold_dram`, `local_sram`, and `direct_forward`. The first input and final output remain DRAM
 transactions. Local retention reuses the producer SRAM write and consumer SRAM
 read already present in the per-GEMM model, so it adds no duplicate SRAM charge.
 Direct forwarding uses the existing route bandwidth reciprocal and energy per
@@ -430,8 +428,7 @@ boundary_energy = 8 * bytes * (producer_DRAM_energy_per_bit
                                + consumer_DRAM_energy_per_bit)
 ```
 
-The fit case must retain the complete intermediate and match ideal-on-chip
-latency. The overflow case must fall back for the whole boundary, report twice
+The fit case must retain the complete intermediate. The overflow case must fall back for the whole boundary, report twice
 the intermediate size as DRAM traffic, and match cold-DRAM latency. The command
 returns a failure status if methods, accounting, latency, or energy violate
 these expectations.
@@ -498,14 +495,16 @@ calibration samples. These values differ from those described in `README.md`.
 
 ```text
 cfg/gen_arch/<run-name>/
-├── best_arch_<run-name>_<timestamp>.json
+├── best_design_point_<run-name>_<timestamp>.json
 ├── cost_v_iteration_<run-name>_<timestamp>.png
 ├── sa_arch_detail_<run-name>_<timestamp>.csv
 └── sa_metrics_<run-name>_<timestamp>.csv
 ```
 
-- `best_arch_*.json` contains the selected chiplets, package, memory mapping,
-  links, protocols, and workload mapping.
+- `best_design_point_*.json` is the one result file. Its `architecture` section
+  contains the selected chiplets, package, memory mapping, links, protocols,
+  and link timing. Its `workload_mapping` section contains the chiplets and
+  GEMM settings of each operation and the movement policy of each handoff.
 - `sa_metrics_*.csv` records each attempted move, acceptance decision, scalar
   cost, normalized contributions, raw sequence totals, and per-GEMM latency and
   energy metrics.
@@ -595,9 +594,9 @@ Technology-scaling tables:
   sequential `Gemm`/`relu` chains.
 - `system/utils/OperationEvaluator.py`: evaluator contract, result type, and
   evaluator registry.
-- `system/utils/EvaluationProfile.py`: named selection of evaluators, placement,
+- `system/utils/EvaluationProfile.py`: named selection of evaluators, assignment,
   movement policy, and transfer model.
-- `system/utils/OperationPlacement.py`: operation-to-endpoint placement policy.
+- `system/utils/OperationAssignment.py`: operation-to-endpoint assignment policy.
 - `system/utils/TensorMovement.py`: tensor residency ledger and movement plan.
 - `system/utils/UnsupportedEvaluation.py`: shared failure type for unmodeled
   capabilities.

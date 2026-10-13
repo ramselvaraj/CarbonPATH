@@ -197,7 +197,6 @@ def run_search(
                             load_json(search_space)
                         ),
                         "atlas_objective": objective,
-                        "candidate_profiles": (profile,),
                     }
                 best_cost, best_architecture, trace, architecture_trace = (
                     sim_annealing(**common, **flow)

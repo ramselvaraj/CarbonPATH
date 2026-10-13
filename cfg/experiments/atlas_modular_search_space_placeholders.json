@@ -8,6 +8,10 @@
     "gemm_dataflow": 1.0,
     "gemm_split_k": 1.0,
     "gemm_assignment_order": 1.0,
+    "gemm_merge_tiles": 1.0,
+    "gemm_sa_set": 1.0,
+    "handoff_movement": 1.0,
+    "fpga_count": 1.0,
     "fpga_clbs": 1.0,
     "fpga_brams": 1.0,
     "fpga_dsps": 1.0,
@@ -16,8 +20,7 @@
     "mem_type": 1.0,
     "interconnect": 1.0,
     "protocol": 1.0,
-    "transfer_model": 1.0,
-    "profile": 1.0
+    "transfer_model": 1.0
   },
   "sys_array": ["64x64", "96x96", "128x128", "192x192"],
   "tech_nodes": ["7", "10", "14"],
@@ -28,6 +31,7 @@
     "192x192": [2048, 4096, 6144, 8192]
   },
   "fpga": {
+    "count": [1],
     "clbs": [8000, 10000, 16000, 32000],
     "brams": [100, 200, 400],
     "dsps": [250, 500, 1000],
@@ -62,13 +66,12 @@
     "mem_pkg_architecture": ["ddr5", "hbm2", "hbm3"]
   },
   "transfer_model": [
-    {"setup_latency_ns": 5.0, "hop_latency_ns": 1.0},
-    {"setup_latency_ns": 2.0, "hop_latency_ns": 0.5}
+    {"setup_latency_ns": 5.0, "hop_latency_ns": 1.0}
   ],
-  "profiles": [
-    "cfg/profiles/atlas_modular_v1.json",
-    "cfg/profiles/placeholders/ph_slow_gemm_v1.json",
-    "cfg/profiles/placeholders/ph_dram_always_v1.json",
-    "cfg/profiles/placeholders/ph_pessimistic_transfer_v1.json"
-  ]
+  "gemm_mapping": {
+    "merge_tiles": [false]
+  },
+  "movement_policy": {
+    "sa_to_sa": ["direct_forward_v1", "local_sram_v1", "cold_dram_v1"]
+  }
 }

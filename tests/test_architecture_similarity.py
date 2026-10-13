@@ -145,7 +145,7 @@ ATLAS_PROFILE = {
         "relu": "legacy_fpga_relu_v1",
         "softmax": "placeholder_fpga_softmax_v0",
     },
-    "placement_policy": "fixed_single_sa_single_fpga_v1",
+    "assignment_policy": "fixed_single_sa_single_fpga_v1",
     "movement_policy": "activation_boundary_v1",
     "transfer_model": "route_transfer_v1",
 }
@@ -240,6 +240,44 @@ class ArchitectureSimilarityTests(unittest.TestCase):
         left = architecture_features(make_atlas_arch(clbs=8000))
         right = architecture_features(make_atlas_arch(clbs=16000))
         self.assertGreater(feature_distance(left, right), 0.0)
+
+    def test_load_run_set_reads_a_design_point_file(self):
+        architecture = make_atlas_arch()
+        document = {
+            "format": "carbonpath_design_point",
+            "version": 1,
+            "workload": {"graph": "g", "fingerprint": "abc"},
+            "evaluated_with": {"profile": "p9", "fingerprint": "123456789abc"},
+            "architecture": {
+                key: value for key, value in architecture.items() if key != "WL_mapping"
+            },
+            "workload_mapping": {
+                "operations": [
+                    {
+                        "operation": "gemm_0",
+                        "type": "gemm",
+                        "endpoints": ["Chiplet_1"],
+                        "dataflow": "os",
+                        "split_k": False,
+                        "tile_order": "ascending",
+                        "merge_tiles": False,
+                    }
+                ],
+                "handoffs": [],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "set_run01"
+            write_run(run, 1.0, architecture)
+            (run / "best_arch_run.json").unlink()
+            (run / "best_design_point_run.json").write_text(
+                json.dumps(document), encoding="utf-8"
+            )
+            run_set = load_run_set("set", str(Path(tmp) / "set_run*"))
+
+        record = run_set.records[0]
+        self.assertEqual(record.profile_name, "p9")
+        self.assertEqual(record.profile_fingerprint, "123456789abc")
 
     def test_load_run_set_reads_best_profile(self):
         with tempfile.TemporaryDirectory() as directory:

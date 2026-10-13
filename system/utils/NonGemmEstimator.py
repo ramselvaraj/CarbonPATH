@@ -216,7 +216,7 @@ class FpgaReluEvaluator(OperationEvaluator):
 
     Wraps the resource-derived ReLU compute estimator. It returns only compute
     latency and dynamic energy; tensor movement is owned by the tensor movement
-    service and the executor owns placement and residency.
+    service and the executor owns assignment and residency.
     """
 
     evaluator_id = "legacy_fpga_relu_v1"
@@ -226,11 +226,11 @@ class FpgaReluEvaluator(OperationEvaluator):
     def __init__(self, compute_estimator=None):
         self.compute_estimator = compute_estimator or ReluComputeEstimator()
 
-    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
-        fpga = context.system.fpga_chiplet_dict.get(placement.endpoint_id)
+    def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
+        fpga = context.system.fpga_chiplet_dict.get(assignment.endpoint_id)
         if fpga is None:
             raise UnsupportedEvaluation(
-                f"no FPGA endpoint {placement.endpoint_id} for "
+                f"no FPGA endpoint {assignment.endpoint_id} for "
                 f"'{evaluator_input.operation_id}'"
             )
         estimate = self.compute_estimator.estimate(
@@ -299,11 +299,11 @@ class PlaceholderHlsReluEvaluator(OperationEvaluator):
     def __init__(self, compute_estimator=None):
         self.compute_estimator = compute_estimator or ReluComputeEstimator()
 
-    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
-        fpga = context.system.fpga_chiplet_dict.get(placement.endpoint_id)
+    def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
+        fpga = context.system.fpga_chiplet_dict.get(assignment.endpoint_id)
         if fpga is None:
             raise UnsupportedEvaluation(
-                f"no FPGA endpoint {placement.endpoint_id} for "
+                f"no FPGA endpoint {assignment.endpoint_id} for "
                 f"'{evaluator_input.operation_id}'"
             )
         estimate = self.compute_estimator.estimate(
@@ -366,11 +366,11 @@ class PlaceholderSoftmaxEvaluator(OperationEvaluator):
     operation_type = "softmax"
     input_adapter_id = "placeholder_fpga_softmax_input_v0"
 
-    def evaluate(self, evaluator_input, placement, context) -> OperationEstimate:
-        fpga = context.system.fpga_chiplet_dict.get(placement.endpoint_id)
+    def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
+        fpga = context.system.fpga_chiplet_dict.get(assignment.endpoint_id)
         if fpga is None:
             raise UnsupportedEvaluation(
-                f"no FPGA endpoint {placement.endpoint_id} for "
+                f"no FPGA endpoint {assignment.endpoint_id} for "
                 f"'{evaluator_input.operation_id}'"
             )
         if fpga.frequency_hz <= 0:

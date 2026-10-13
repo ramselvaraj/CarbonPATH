@@ -7,11 +7,11 @@ Completed locally so far:
 - canonical, label-independent architecture identity;
 - architecture validation and `ChipletSystem` construction for one through six
   heterogeneous SAs, with optional FPGA endpoints and connected routes;
-- explicit SA endpoint groups and all-SA GEMM placement;
+- explicit SA endpoint groups and all-SA GEMM assignment;
 - evaluator-owned dataflow, split-K, and assignment-order settings;
 - multi-SA tile coverage, per-tile result reporting, and explicit split-K
   reduction metrics;
-- `cold_dram`, `ideal_on_chip`, `local_sram`, and `direct_forward` as modular
+- `cold_dram`, `local_sram`, and `direct_forward` as modular
   movement-policy implementations;
 - original `t1` through `t4` scoring and all normalization modes behind the
   modular objective interface;
@@ -93,7 +93,7 @@ top-level evaluator and annealing path are not reused by production code.
 
 ## Settled design decisions
 
-1. **One modular executor.** Every supported graph uses the same placement,
+1. **One modular executor.** Every supported graph uses the same assignment,
    operation-evaluation, movement, transfer, aggregation, objective, and search
    flow.
 2. **GEMM mapping stays inside the GEMM evaluator.** Dataflow, split-K, and
@@ -104,8 +104,8 @@ top-level evaluator and annealing path are not reused by production code.
    residency and spilling; transfer owns route latency and energy; design-point
    metric calculation owns package cost and carbon; the objective combines the
    metrics.
-4. **Placement selects an endpoint or SA group.** The first complete SA
-   placement implementation assigns GEMMs to all eligible SAs. The GEMM
+4. **Assignment selects an endpoint or SA group.** The first complete SA
+   assignment implementation assigns GEMMs to all eligible SAs. The GEMM
    evaluator maps tiles within the selected group.
 5. **Existing low-level mathematics are retained.** `Scheduler`, SCALE-Sim,
    `SimulationCache`, intermediate-memory calculations, package generation,
@@ -132,7 +132,7 @@ annealing experiments run on the remote compute server.
 
 - edit and review code and documentation;
 - run format, import, schema, and static checks;
-- run unit tests for architecture handling, profiles, placement, movement,
+- run unit tests for architecture handling, profiles, assignment, movement,
   transfer, objectives, mutations, and annealer state transitions;
 - run fixture-backed point comparisons that do not invoke new SCALE-Sim work;
 - run mocked or deliberately tiny deterministic search tests whose purpose is
@@ -208,7 +208,7 @@ following original capabilities:
 - multi-SA tiling, scheduling, execution, and reductions;
 - 2D, 2.5D, and 3D package generation and validity constraints;
 - supported memory, interconnect, and protocol choices;
-- `cold_dram`, `ideal_on_chip`, `local_sram`, and `direct_forward` intermediate
+- `cold_dram`, `local_sram`, and `direct_forward` intermediate
   behavior;
 - architecture power, area, dollar cost, embodied carbon, and operational
   carbon;
@@ -221,9 +221,9 @@ The following modular additions must remain supported:
 
 - FPGA endpoints and FPGA resource/frequency/implementation changes;
 - mixed GEMM, ReLU, and Softmax graphs;
-- heterogeneous operation placement;
+- heterogeneous operation assignment;
 - explicit tensor residency and movement;
-- replaceable operation evaluators, placement policies, movement policies,
+- replaceable operation evaluators, assignment policies, movement policies,
   transfer cost models, and objectives;
 - profile selection and profile identity in results.
 
@@ -247,7 +247,7 @@ backwards-compatible adapter.
 Selects:
 
 - operation evaluators;
-- operation placement policy;
+- operation assignment policy;
 - tensor movement policy;
 - transfer cost model.
 
@@ -264,10 +264,10 @@ evaluators:
       assignment_order: ascending
 ```
 
-### Placement
+### Assignment
 
 Assigns each operation to one endpoint or endpoint group. It does not tile a
-GEMM. The complete SA placement implementation returns the group of all
+GEMM. The complete SA assignment implementation returns the group of all
 eligible SAs; future implementations may choose subsets without changing the
 executor.
 
@@ -292,7 +292,7 @@ implementations using the validated intermediate-memory calculations.
 
 Receives an already resolved movement path and payload, then returns movement
 latency and energy using the selected memory, topology, link, and protocol
-models. It does not choose operation placement or GEMM mapping.
+models. It does not choose operation assignment or GEMM mapping.
 
 ### Design-point metric calculation and objective
 
@@ -360,7 +360,7 @@ fingerprinted without requiring the original top-level flow.
 
 1. Extend the evaluation-profile schema so evaluator selections may carry
    validated nested settings while preserving existing string-based profiles.
-2. Make placement return the complete eligible SA group for GEMM.
+2. Make assignment return the complete eligible SA group for GEMM.
 3. Move construction of `Scheduler` inputs behind the GEMM evaluator interface.
 4. Feed dataflow, split-K, assignment order, and multi-SA topology into the
    existing scheduler and SCALE-Sim/cache engines.
@@ -532,7 +532,7 @@ Retain or add tests for:
 - GEMM → ReLU → GEMM and GEMM → Softmax graphs;
 - SA-to-FPGA and FPGA-to-SA tensor movement;
 - FPGA resources, frequency, and operation-design changes;
-- alternative evaluator, placement, movement, transfer, and objective
+- alternative evaluator, assignment, movement, transfer, and objective
   implementations;
 - profile identity and replacement;
 - deliberately different profiles producing predictably different results;

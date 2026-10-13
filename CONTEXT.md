@@ -33,24 +33,24 @@ from an operation-specific input view.
 _Avoid_: operation handler, operation branch
 
 **Evaluation profile**:
-The named selection of operation evaluators, placement policy, tensor movement
+The named selection of operation evaluators, assignment policy, tensor movement
 policy, and transfer cost model used for one evaluation.
 _Avoid_: global configuration, estimator mode
 
-**Operation placement**:
-The assignment of a graph operation to an endpoint or endpoint group. It is
-distinct from the assignment of GEMM tiles within an SA group.
-_Avoid_: mapping
+**Operation assignment**:
+The choice of the endpoint or endpoint group that runs one graph operation. It
+is distinct from GEMM tile mapping, which works inside an SA group.
+_Avoid_: operation placement, placement policy, mapping
 
 **GEMM tile mapping**:
 The assignment of the tiles of one GEMM to systolic arrays within its assigned
 SA group.
-_Avoid_: operation placement
+_Avoid_: operation assignment
 
 **Tensor residency**:
 The endpoint and storage location at which a produced tensor, or a defined
 region of it, is available to a consumer.
-_Avoid_: tensor placement
+_Avoid_: tensor assignment
 
 **Tensor movement plan**:
 The selected retention, forwarding, replication, or DRAM-spill path that makes
@@ -62,18 +62,63 @@ A replaceable model that estimates latency and dynamic energy for one planned
 tensor movement over a resolved path.
 _Avoid_: routing policy, operation evaluator
 
+**Movement policy**:
+The replaceable adapter that plans one adjacent graph handoff. It exposes one
+call shape, `plan(request)`, and owns the movement rules behind that seam. The
+named movement policy is a code identifier, not a domain decision.
+_Avoid_: boundary policy, movement handler
+
+**Movement seam**:
+The single interface between the executor and a movement policy: the executor
+supplies a movement request and receives a movement plan, without inspecting
+GEMM tiles or branching on operation type.
+_Avoid_: movement branch, boundary call site
+
+**Movement phase**:
+The movement for one adjacent graph handoff. Its latency is the maximum routed
+slice completion; its energy is the sum of every physical slice's energy.
+_Avoid_: transfer estimate, boundary cost
+
+**Routed tensor slice**:
+One physical transfer of a rectangular tensor region between two endpoints,
+with its resolved route, byte count, latency, and energy. Multiple slices make
+up one movement phase; replication means physical bytes can exceed logical
+bytes.
+_Avoid_: transfer slice, tile
+
 **Modular design point**:
-One fixed architecture paired with one fixed evaluation profile, evaluated by the
-modular executor. It is the unit that modular annealing proposes, scores, and
-accepts or rejects. The ATLAS graph is fixed for the whole search.
+One architecture paired with one workload mapping, evaluated by the modular
+executor. It is the unit that modular annealing proposes, scores, and accepts or
+rejects. The ATLAS graph and the evaluation profile are fixed for the whole
+search.
 _Avoid_: candidate, configuration
+
+**Workload mapping**:
+The part of a design point that says how the workload uses the architecture: the
+endpoints of each operation, the dataflow, split-K and tile order of each GEMM,
+and the movement policy of each handoff. Annealing changes it. The evaluation
+profile gives only its first values.
+_Avoid_: profile knob, evaluator setting, placement policy
+
+**Design point file**:
+The one result file of a run. It holds the best architecture and its workload
+mapping in two sections, with the name and fingerprint of the workload graph
+and of the evaluation profile. It holds no scores. A run can start from it.
+_Avoid_: best architecture file, best profile file
+
+**One-option parameter**:
+A parameter that is in the loop but whose option list in the search space has
+one entry, such as the FPGA count or the link timing. The search does not select
+its move. A second entry puts it in the search with no code change.
+_Avoid_: fixed parameter, hard-coded parameter
 
 **Final-result equivalence**:
 For an equivalent sequential-GEMM workload and search definition, modular
 annealing returns the same canonical best architecture, numerically equivalent
 raw metrics, and numerically equivalent objective value as original CarbonPATH.
 It does not require both searches to follow the same proposal or acceptance
-trace; equal-scoring architectures are resolved by deterministic tie-breaking.
+trace. The best design changes only on a strict objective improvement, so of
+several equal-scoring architectures the search keeps the first one it reached.
 _Avoid_: trace equivalence, legacy mode
 
 **ATLAS objective**:
@@ -81,12 +126,6 @@ A replaceable model that turns one modular design point's raw metrics (latency,
 energy, area, cost, carbon) into the single scalar the search minimizes. Its
 configuration may include metric weights, normalization, and calibration data.
 _Avoid_: cost function, calibration
-
-**Candidate profile catalog**:
-The named set of evaluation profiles a modular search may choose from, listed by
-the atlas search space. A candidate profile is a complete evaluation profile, not
-a partial override.
-_Avoid_: profile list, estimator mode
 
 **Placeholder policy**:
 A deliberately bad movement, transfer, or evaluator model used only to check that

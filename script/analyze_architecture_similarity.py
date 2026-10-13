@@ -1,10 +1,10 @@
 """Architecture similarity analysis for CarbonPATH run sets.
 
 Each "set" is a labelled group of run directories produced by one annealing
-schedule/experiment. A run directory is any directory containing both a
-``best_arch_*.json`` file and an ``sa_metrics_*.csv`` file. If the run directory
-also contains a ``best_profile.json`` (modular ATLAS runs), its evaluation
-profile name and fingerprint are recorded too.
+schedule/experiment. A run directory is any directory containing both a result
+file (``best_design_point_*.json``, or ``best_arch_*.json`` from an older run)
+and an ``sa_metrics_*.csv`` file. The evaluation profile name and fingerprint
+are recorded from the design point file, or from an older ``best_profile.json``.
 
 The script writes a Markdown report plus CSV tables covering:
 
@@ -45,6 +45,7 @@ from system.utils.ArchitectureIdentity import (
     canonical_architecture_fingerprint,
     canonicalize_chiplet_labels,
 )
+from system.utils.DesignPointFile import latest_result_file, read_design_point
 from system.utils.EvaluationProfile import (
     parse_evaluation_profile,
 )
@@ -206,8 +207,16 @@ def within_tolerance_count(records: list[RunRecord], tolerance=CLUSTER_TOLERANCE
     )
 
 
-def _profile_identity(path: Path):
-    """Return ``(name, fingerprint)`` from a modular ``best_profile.json``."""
+def _profile_identity(path: Path, loaded=None):
+    """Return the ``(name, fingerprint)`` of the profile that scored a run.
+
+    A design point file records it. An older run has a ``best_profile.json``.
+    """
+    if loaded is not None and loaded.evaluated_with:
+        return (
+            loaded.evaluated_with.get("profile"),
+            loaded.evaluated_with.get("fingerprint"),
+        )
     profile_path = path / "best_profile.json"
     if not profile_path.exists():
         return None, None
@@ -223,14 +232,14 @@ def load_run_set(label: str, pattern: str) -> RunSet:
     run_set = RunSet(label=label, pattern=pattern)
     for directory in sorted(glob.glob(pattern)):
         path = Path(directory)
-        architectures = sorted(path.glob("best_arch_*.json"))
+        result_file = latest_result_file(path)
         metrics = sorted(path.glob("sa_metrics_*.csv"))
-        if not architectures or not metrics:
+        if result_file is None or not metrics:
             continue
-        with architectures[-1].open(encoding="utf-8") as handle:
-            architecture = json.load(handle)
+        loaded = read_design_point(result_file)
+        architecture = loaded.architecture
         frame = pd.read_csv(metrics[-1])
-        profile_name, profile_fingerprint = _profile_identity(path)
+        profile_name, profile_fingerprint = _profile_identity(path, loaded)
         run_set.records.append(
             RunRecord(
                 set_label=label,

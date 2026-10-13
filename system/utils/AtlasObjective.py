@@ -11,7 +11,7 @@ future calibrated objective (for example a ``calibrated_t1_v1``) is a new class
 plus one registry entry, with no change to ``sim_annealing``.
 
 This mirrors the replaceable-model registries used for evaluators, operation
-placement, tensor movement, and transfer cost.
+assignment, tensor movement, and transfer cost.
 """
 
 from __future__ import annotations

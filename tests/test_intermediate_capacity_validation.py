@@ -43,14 +43,10 @@ class IntermediateCapacityValidationTests(unittest.TestCase):
         indexed = results.set_index(["case", "requested_policy"])
         fit_local = indexed.loc[("fits", "local_sram")]
         overflow_local = indexed.loc[("overflows", "local_sram")]
-        fit_ideal = indexed.loc[("fits", "ideal_on_chip")]
         overflow_cold = indexed.loc[("overflows", "cold_dram")]
 
         self.assertEqual(fit_local["actual_selected_method"], "local_sram")
         self.assertEqual(fit_local["retained_bytes"], 256 * 1024)
-        self.assertAlmostEqual(
-            fit_local["actual_latency_ns"], fit_ideal["actual_latency_ns"]
-        )
 
         self.assertEqual(overflow_local["actual_selected_method"], "cold_dram")
         self.assertEqual(overflow_local["dram_spilled_bytes"], 256 * 1024 + 512)

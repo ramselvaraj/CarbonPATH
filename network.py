@@ -28,12 +28,12 @@ from system.utils.NetworkWorkload import (
     canonical_fingerprint,
     parse_network_entry,
 )
+from system.utils.DesignPointFile import read_design_point
 from system.utils.SimulationCache import SimulationCache
 
 
 EXPLICIT_MEMORY_POLICIES = (
     "cold_dram",
-    "ideal_on_chip",
     "local_sram",
     "direct_forward",
 )
@@ -58,6 +58,86 @@ def load_workload(path):
     if isinstance(entry, list):
         return parse_atlas_graph(entry, default_graph_name(path))
     return parse_network_entry(entry)
+
+
+ATLAS_BOUNDARY_COLUMNS = [
+    "boundary_index",
+    "producer_layer",
+    "consumer_layer",
+    "producer_type",
+    "consumer_type",
+    "slice_index",
+    "slice_count",
+    "tensor_id",
+    "row_offset",
+    "row_count",
+    "feature_offset",
+    "feature_count",
+    "source_endpoint",
+    "destination_endpoint",
+    "route",
+    "logical_bytes",
+    "physical_bytes",
+    "setup_latency_ns",
+    "hop_latency_ns",
+    "serialization_latency_ns",
+    "slice_bytes",
+    "slice_latency_ns",
+    "slice_energy_pj",
+    "handoff_latency_ns",
+    "handoff_energy_pj",
+    "handoff_logical_bytes",
+    "handoff_physical_bytes",
+    "method",
+]
+
+
+def _atlas_boundary_rows(evaluation):
+    """One row per routed tensor slice; handoff totals repeat on every row."""
+    rows = []
+    results = evaluation.results
+    for result in results:
+        movement = result.movement
+        if movement is None:
+            continue
+        slices = getattr(movement, "transfer_slices", ())
+        if not slices:
+            continue
+        producer = results[result.index - 2]
+        for slice_index, tensor_slice in enumerate(slices, start=1):
+            rows.append(
+                {
+                    "boundary_index": result.index,
+                    "producer_layer": producer.operation_id,
+                    "consumer_layer": result.operation_id,
+                    "producer_type": producer.operation_type,
+                    "consumer_type": result.operation_type,
+                    "slice_index": slice_index,
+                    "slice_count": len(slices),
+                    "tensor_id": tensor_slice.tensor_id,
+                    "row_offset": tensor_slice.row_offset,
+                    "row_count": tensor_slice.row_count,
+                    "feature_offset": tensor_slice.feature_offset,
+                    "feature_count": tensor_slice.feature_count,
+                    "source_endpoint": tensor_slice.source_endpoint,
+                    "destination_endpoint": tensor_slice.destination_endpoint,
+                    "route": "->".join(map(str, tensor_slice.route)),
+                    "logical_bytes": movement.logical_bytes,
+                    "physical_bytes": movement.physical_bytes,
+                    "setup_latency_ns": tensor_slice.setup_latency_ns,
+                    "hop_latency_ns": tensor_slice.hop_latency_ns,
+                    "serialization_latency_ns": tensor_slice.serialization_latency_ns,
+                    "slice_bytes": tensor_slice.byte_count,
+                    "slice_latency_ns": tensor_slice.slice_latency_ns,
+                    "slice_energy_pj": tensor_slice.slice_energy_pj,
+                    "handoff_latency_ns": movement.charged_latency_ns,
+                    "handoff_energy_pj": movement.charged_energy_pj,
+                    "handoff_logical_bytes": movement.logical_bytes,
+                    "handoff_physical_bytes": movement.physical_bytes,
+                    "method": movement.method,
+                }
+            )
+    return rows
 
 
 ATLAS_LAYER_COLUMNS = [
@@ -180,7 +260,7 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
         "operation_counts": operation_counts,
         "gemm_count": gemm_count,
         "relu_count": relu_count,
-        "placement_policy": evaluation.profile.placement_policy,
+        "assignment_policy": evaluation.profile.assignment_policy,
         "movement_policy": evaluation.profile.movement_policy,
         "transfer_model": evaluation.profile.transfer_model,
         "latency_ns": latency_ns,
@@ -201,7 +281,9 @@ def evaluate_atlas_network(graph, architecture, cache, intermediate_policy=None,
     return NetworkEvaluation(
         summary=summary,
         layers=pd.DataFrame(layer_rows, columns=ATLAS_LAYER_COLUMNS),
-        boundaries=pd.DataFrame(),
+        boundaries=pd.DataFrame(
+            _atlas_boundary_rows(evaluation), columns=ATLAS_BOUNDARY_COLUMNS
+        ),
         mapping=pd.DataFrame(mapping_rows),
     )
 
@@ -695,7 +777,9 @@ def main():
         print(f"Calibration: {calibration_path}")
         return
 
-    architecture = _load_json(args.architecture)
+    # A design point file gives its architecture. Its workload mapping is not
+    # used here: every operation uses the policies of the profile.
+    architecture = read_design_point(args.architecture).architecture
     search_space = _load_json(args.search_space)
     if isinstance(network, AtlasGraph):
         calibration_policy = None

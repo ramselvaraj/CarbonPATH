@@ -32,17 +32,16 @@ def architecture_fingerprint(architecture):
     return hashlib.sha256(serialized.encode("ascii")).hexdigest()[:12]
 
 
-def canonicalize_chiplet_labels(architecture):
-    """Normalize arbitrary Chiplet_N names while preserving stack roles."""
-    result = deepcopy(architecture)
+def canonical_chiplet_labels(architecture):
+    """Map each Chiplet_N name to its normalized name."""
     chiplets = sorted(
-        (key for key in result if key.startswith("Chiplet_")),
+        (key for key in architecture if key.startswith("Chiplet_")),
         key=lambda key: int(key.split("_", 1)[1]),
     )
     if not chiplets:
-        return result
+        return {}
 
-    package = result.get("pkg", {})
+    package = architecture.get("pkg", {})
     memory = package.get("mem_pkg_conn", {})
     connections = package.get("inter_pkg_conn", [])
     connection_dicts = [
@@ -68,7 +67,7 @@ def canonicalize_chiplet_labels(architecture):
         ordered.extend(chiplet for chiplet in chiplets if chiplet not in ordered)
     else:
         def chiplet_key(chiplet):
-            hardware = result[chiplet]
+            hardware = architecture[chiplet]
             chiplet_type = str(
                 hardware.get("chiplet_type", "systolic_array")
             ).lower()
@@ -84,7 +83,17 @@ def canonicalize_chiplet_labels(architecture):
             )
 
         ordered = sorted(chiplets, key=chiplet_key)
-    labels = {old: f"Chiplet_{index}" for index, old in enumerate(ordered, start=1)}
+    return {old: f"Chiplet_{index}" for index, old in enumerate(ordered, start=1)}
+
+
+def canonicalize_chiplet_labels(architecture):
+    """Normalize arbitrary Chiplet_N names while preserving stack roles."""
+    result = deepcopy(architecture)
+    labels = canonical_chiplet_labels(result)
+    if not labels:
+        return result
+    ordered = list(labels)
+    memory = result.get("pkg", {}).get("mem_pkg_conn", {})
 
     normalized = {
         labels.get(key, key): value

@@ -120,9 +120,9 @@ class NetworkEvaluationTests(unittest.TestCase):
 
         self.assertEqual(
             comparison["requested_policy"].tolist(),
-            ["cold_dram", "ideal_on_chip", "local_sram", "direct_forward"],
+            ["cold_dram", "local_sram", "direct_forward"],
         )
-        self.assertEqual(len(evaluations), 4)
+        self.assertEqual(len(evaluations), 3)
         cold_latency = comparison.loc[
             comparison["requested_policy"] == "cold_dram", "latency_ns"
         ].iloc[0]

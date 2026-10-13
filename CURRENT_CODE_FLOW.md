@@ -142,7 +142,6 @@ adjacent GEMMs.
 Supported policies:
 
 - `cold_dram`: spill and reload through DRAM.
-- `ideal_on_chip`: remove the internal transfer as an upper bound.
 - `local_sram`: retain a boundary only when placement and capacity allow it.
 - `direct_forward`: retain same-core slices and route remote slices through existing links.
 
@@ -220,12 +219,16 @@ It skips calibration and the legacy GEMM sequence and instead:
 `system/utils/AtlasObjective.py` owns the replaceable objective. The default
 `raw_weighted_sum_v0` is uncalibrated and reads coefficients from
 `cfg/parameters/atlas_objective.json`. `cfg/experiments/atlas_modular_search_space.json`
-declares the modular search space and candidate profiles.
+declares the modular search space: the option list of each architecture and
+workload-mapping parameter. The evaluation profile is constant for one run.
 
 The trace DataFrame returned in ATLAS mode carries
-`attrs["best_profile"]`, `attrs["best_profile_fingerprint"]`, and
-`attrs["candidate_profiles"]`. The best profile is written to
-`cfg/gen_arch/<run>/best_profile.json`.
+`attrs["best_profile"]`, `attrs["best_profile_fingerprint"]`,
+`attrs["best_workload_mapping"]`,
+`attrs["best_workload_mapping_fingerprint"]`, and
+`attrs["best_design_point"]`. The main run writes the design point to one file,
+`cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json`.
+`system/utils/DesignPointFile.py` is the only code that knows its layout.
 
 Placeholder material for checking the search lives in
 `system/utils/PlaceholderPolicies.py`, `cfg/profiles/placeholders/`, and

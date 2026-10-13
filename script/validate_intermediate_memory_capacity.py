@@ -17,7 +17,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from chiplet.n_utils import get_area_power, get_sram_area_energy
-from main import parse_workload_entry, simulate_latency_energy
+from main import (
+    parse_workload_entry,
+    simulate_latency_energy,
+    simulate_single_gemm,
+)
 from system.utils.ChipletSystem import ChipletSystem
 from system.utils.SimulationCache import SimulationCache
 
@@ -34,7 +38,6 @@ CACHE_COLUMNS = [
 ]
 VALIDATION_POLICIES = (
     "cold_dram",
-    "ideal_on_chip",
     "local_sram",
     "direct_forward",
 )
@@ -196,8 +199,6 @@ def build_policy_validation_architectures():
 def _expected_selected_method(case_name, policy):
     if policy == "cold_dram":
         return "cold_dram"
-    if policy == "ideal_on_chip":
-        return "ideal_on_chip"
     if case_name == "fits":
         return "local_sram"
     return "cold_dram"
@@ -386,6 +387,24 @@ def run_capacity_validation(cache, tolerance=1e-9):
     return pd.DataFrame(rows)
 
 
+def _without_boundary_cost(cache, architecture, workload):
+    """Latency and communication energy with no cost at an internal boundary."""
+    gemms = workload["gemms"]
+    latency_ns = 0
+    energy_pj = 0
+    for index, gemm in enumerate(gemms):
+        metrics = simulate_single_gemm(
+            cache,
+            architecture,
+            gemm["shape"],
+            activation_from_dram=(index == 0),
+            output_to_dram=(index == len(gemms) - 1),
+        )
+        latency_ns += metrics["latency_ns"]
+        energy_pj += metrics["dram_interconnect_energy_pj"]
+    return latency_ns, energy_pj
+
+
 def run_two_gemm_mapping_validation(cache, tolerance=1e-9):
     workload = build_two_gemm_validation_case()
     architectures = {
@@ -402,9 +421,7 @@ def run_two_gemm_mapping_validation(cache, tolerance=1e-9):
         cold = simulate_latency_energy(
             cache, architecture, workload, intermediate_policy="cold_dram"
         )
-        ideal = simulate_latency_energy(
-            cache, architecture, workload, intermediate_policy="ideal_on_chip"
-        )
+        ideal = _without_boundary_cost(cache, architecture, workload)
         direct = simulate_latency_energy(
             cache, architecture, workload, intermediate_policy="direct_forward"
         )
@@ -875,7 +892,7 @@ def write_report(results, output_path, figure_path, csv_path):
             "",
             "## Capacity Outcome",
             "",
-            f"The exact-fit local request retained {fit_local['retained_bytes']:,.0f} bytes and matched ideal-on-chip latency. The overflow local request selected cold DRAM, moved {overflow_local['dram_traffic_bytes']:,.0f} DRAM bytes, and matched the cold baseline.",
+            f"The exact-fit local request retained {fit_local['retained_bytes']:,.0f} bytes. The overflow local request selected cold DRAM, moved {overflow_local['dram_traffic_bytes']:,.0f} DRAM bytes, and matched the cold baseline.",
             "",
             f"Fallback reason: `{overflow_local['fallback_reason']}`.",
             "",
@@ -917,7 +934,7 @@ def write_two_gemm_report(results, output_path, csv_path):
             "",
             "## Accounting Check",
             "",
-            "Expected direct-forward values remove the measured boundary DRAM delta between cold DRAM and ideal on-chip, then add the independently planned forwarding latency and energy.",
+            "Expected direct-forward values remove the measured boundary DRAM delta between cold DRAM and a run with no boundary cost, then add the independently planned forwarding latency and energy.",
             "",
             "| Case | Cold latency | Removed DRAM | Added forwarding | Expected direct | Actual direct |",
             "| --- | ---: | ---: | ---: | ---: | ---: |",

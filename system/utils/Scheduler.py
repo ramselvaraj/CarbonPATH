@@ -500,7 +500,9 @@ class Scheduler:
             total_latency_by_link.append(latency_per_link)
             print_key_var = tuple(i+1 for i in key)
 
-        final_total_latency = max(total_latency_by_link)
+        # A single-SA split-K design has no inter-SA link to the reduction owner,
+        # so there is no interconnect latency to accumulate.
+        final_total_latency = max(total_latency_by_link) if total_latency_by_link else 0
         total_energy = sum(energy for sublist in energy_by_link_to_dest.values() for energy in sublist)
 
         return final_total_latency, total_energy

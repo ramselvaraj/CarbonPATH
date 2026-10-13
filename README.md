@@ -212,7 +212,7 @@ Evaluate it on an existing architecture:
 ```bash
 .venv/bin/python -m network evaluate \
   --network cfg/examples/mlp_network.json \
-  --architecture cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --architecture cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json \
   --memory-policy local_sram \
   --output-dir reports/networks/four_layer_mlp/evaluate_local
 ```
@@ -222,7 +222,7 @@ Compare all explicit policies on the same architecture:
 ```bash
 .venv/bin/python -m network compare-memory \
   --network cfg/examples/mlp_network.json \
-  --architecture cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --architecture cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json \
   --output-dir reports/networks/four_layer_mlp/compare_memory
 ```
 
@@ -253,7 +253,7 @@ chiplet. The architecture declares the FPGA resources and a characterized
 per-lane ReLU implementation profile; the number of parallel lanes is derived
 from CLB/BRAM/DSP counts rather than assumed.
 
-An evaluation profile names the operation evaluators, placement policy, tensor
+An evaluation profile names the operation evaluators, assignment policy, tensor
 movement policy, and transfer cost model. The profile is recorded with the
 results so different model selections cannot be compared as if identical.
 
@@ -354,7 +354,6 @@ Sequences execute strictly in order. Each GEMM receives a fresh scheduler and sy
 The `--intermediate_policy` option controls each internal GEMM boundary:
 
 - `cold_dram` writes the producer output to DRAM and reads it for the consumer.
-- `ideal_on_chip` removes internal transfer latency and energy as an upper-bound experiment.
 - `local_sram` retains data only when producer and consumer placement is on the same core and the intermediate fits its SRAM; otherwise the whole boundary falls back to DRAM.
 - `direct_forward` is the default. It retains same-core slices and routes remote slices over the architecture's existing chiplet links; an infeasible boundary falls back to DRAM.
 
@@ -365,7 +364,7 @@ Run all policies on one fixed architecture and write a comparison CSV:
 ```bash
 python -m main --workload 8 --cost_profile t1 \
   --run_mode run_policy_compare \
-  --architecture_file cfg/gen_arch/<run>/best_arch_<run>_<timestamp>.json \
+  --architecture_file cfg/gen_arch/<run>/best_design_point_<run>_<timestamp>.json \
   --run_name policy_comparison
 ```
 
@@ -389,7 +388,7 @@ Overflow:  [512, 64, 513] -> [512, 513, 64]
            intermediate = 262,656 bytes
 ```
 
-The exact-fit case must select local SRAM and match ideal-on-chip latency. The 512-byte overflow must select cold DRAM, report the capacity fallback reason, and match the cold baseline. By default the command creates an empty temporary cache, forcing all four unique GEMMs through SCALE-Sim. Pass `--cache-file PATH` only when cached execution is desired.
+The exact-fit case must select local SRAM. The 512-byte overflow must select cold DRAM, report the capacity fallback reason, and match the cold baseline. By default the command creates an empty temporary cache, forcing all four unique GEMMs through SCALE-Sim. Pass `--cache-file PATH` only when cached execution is desired.
 
 Expected sequence values use each case's measured cold run as the compute baseline and independently calculate the boundary DRAM delta. The experiment validates CarbonPATH's policy threshold and accounting; it does not establish absolute hardware accuracy or model simultaneous occupation by activations, weights, and outputs. The command exits unsuccessfully if selected methods, exact byte placement, fallback reasons, latency, or energy disagree with their predictions. It writes:
 
@@ -449,29 +448,33 @@ cooling_rate=0.99,
 ## Outputs and analysis
 Once CarbonPATH completes, it creates a folder based on workload under the generated architecture directory (cfg/gen_arch)
 
-It contains the best_arch*.json file along with other CSV files that are generated along with the runs. Below is an example of data that is generated for wl1 balance optimization profile case: 
+It contains the best_design_point*.json file along with other CSV files that are generated along with the runs. Below is an example of data that is generated for wl1 balance optimization profile case: 
 
 ```
 Example shown below for WL5 templates T2:
 cfg/gen_arch/wl5_1iteration__t2/ 
-├── best_arch_wl5_1iteration__t2_2026-03-13T02-19-49.json
+├── best_design_point_wl5_1iteration__t2_2026-03-13T02-19-49.json
 ├── cost_v_iteration_wl5_1iteration__t2_2026-03-13T02-19-49.png
 ├── sa_arch_detail_wl5_1iteration__t2_2026-03-13T02-19-49.csv
 └── sa_metrics_wl5_1iteration__t2_2026-03-13T02-19-49.csv
 ```
-The best_arch_wl5*.json is the file that gives the best optimzied HI-system architecture. More details about it explained below. 
+The best_design_point_wl5*.json is the one result file. It gives the best architecture and its workload mapping. More details about it explained below. 
 
 The sa_arch_.csv and sa_metrics_*.csv are data generated for each iteration in the simulated annealing algorithm. The metrics CSV contains sequence totals, per-GEMM latency and energy fields, and per-boundary selected method, byte placement, route, transfer latency, transfer energy, and fallback reason. Fixed-architecture comparisons are written under `reports/intermediate_policy_comparison_*.csv`; deterministic fit/overflow measurements are written to `reports/intermediate_capacity_validation.csv`.
 
-##### Architecture file best_arch*.json 
-This file is generated upon completion of CarbonPATH’s design space exploration. It captures the best-performing architecture, optimized for the given workload under the specified optimization profile. It is structured as below: 
-- Chiplet information 
-- Package information 
-  - HI package type 
-  - Connection topology between chiplets 
-  - Protocol 3D and 2.5D 
-  - Memory information 
-- Workload mapping 
+##### Design point file best_design_point*.json 
+This file is generated upon completion of CarbonPATH’s design space exploration. It captures the best design point for the given workload under the specified optimization profile. It has four sections: 
+- `workload`: the name and fingerprint of the workload graph 
+- `evaluated_with`: the name and fingerprint of the evaluation profile 
+- `architecture` 
+  - Chiplet information (systolic arrays and FPGA) 
+  - Package information: HI package type, connection topology between chiplets, protocol 3D and 2.5D, memory information 
+  - Link timing 
+- `workload_mapping` 
+  - `operations`: for each operation, the chiplets that run it. For each GEMM also the dataflow, split-K, tile order and tile merge 
+  - `handoffs`: for each pair of adjacent operations, the movement policy 
+
+The file does not hold scores. `--architecture_file` accepts this file to start a new run from it. It also accepts an architecture file of original CarbonPATH, which has no sections. 
 
 Differnt example arch.json files for multiple HI-types are shown in [cfg/gen_arch/temp_example](./cfg/gen_arch/temp_example/) directory for multiple chiplet numbers. 
 

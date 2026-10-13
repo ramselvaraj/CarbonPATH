@@ -24,7 +24,7 @@ Within a run, nothing varies:
 endpoints        fixed   SA(0), FPGA(1)
 resources        fixed   CLBs, BRAMs, DSPs, frequency
 routes           fixed   SA(0) <-> FPGA(1)
-placement rules  fixed
+assignment rules  fixed
 models           fixed   per operation type
 ```
 
@@ -59,7 +59,7 @@ Profile describes which models and policies run on it:
 
 ```text
 evaluators       : {gemm, relu, softmax} -> model IDs
-placement_policy : ID
+assignment_policy : ID
 movement_policy  : ID
 transfer_model   : ID
 ```
@@ -68,7 +68,7 @@ transfer_model   : ID
 
 Each policy is named in the profile and resolves to one implementation.
 
-- `placement_policy` — decides which endpoint an operation runs on
+- `assignment_policy` — decides which endpoint an operation runs on
   (`fixed_single_sa_single_fpga_v1`: gemm to SA, relu/softmax to FPGA).
 - `movement_policy` — decides how a produced tensor reaches its consumer
   (`activation_boundary_v1`: retain if the same endpoint, else resolve a route).
@@ -79,7 +79,7 @@ What they look like in the profile:
 
 ```json
 {
-  "placement_policy": "fixed_single_sa_single_fpga_v1",
+  "assignment_policy": "fixed_single_sa_single_fpga_v1",
   "movement_policy": "activation_boundary_v1",
   "transfer_model": "route_transfer_v1",
   "evaluators": {
@@ -93,7 +93,7 @@ What they look like in the profile:
 What they look like in code:
 
 ```text
-placement_policy -> FixedSingleSaSingleFpgaPlacement.endpoint_for(type)
+assignment_policy -> FixedSingleSaSingleFpgaAssignment.endpoint_for(type)
 movement_policy  -> TensorMovementService.move(...)
 transfer_model   -> TransferEstimator.estimate(request)
 ```
@@ -135,7 +135,7 @@ dynamic_energy_pj
 evaluate_atlas(atlas_path, architecture, profile):
     graph   = parse_atlas_graph(read_json(atlas_path))   # ATLAS JSON -> operations
     system  = build_hardware(architecture)               # SA + FPGA + routes
-    policy  = resolve(profile.placement_policy, system)
+    policy  = resolve(profile.assignment_policy, system)
     mover   = resolve(profile.movement_policy, profile.transfer_model)
     models  = resolve(profile.evaluators)                # evaluator + input adapter
 
@@ -173,7 +173,7 @@ skips calibration and the legacy GEMM sequence, and calls the modular evaluator
 for every proposal:
 
 ```text
-candidate architecture + candidate profile
+candidate architecture + candidate workload mapping
         |
         v
    evaluate_atlas_design_point()          # evaluate_atlas_graph + metrics
@@ -191,14 +191,18 @@ candidate architecture + candidate profile
 Where it searches:
 
 ```text
-architecture knobs   SA sys_array, tech node, SRAM; FPGA CLBs, BRAMs, DSPs,
-                     frequency, relu_implementation; package protocol/memory;
-                     transfer model
-profile knobs        evaluator per operation type, placement policy,
-                     movement policy, transfer cost model
+architecture         SA count, sys_array, tech node, SRAM; FPGA count, CLBs,
+                     BRAMs, DSPs, frequency, relu_implementation; package
+                     protocol/memory; link timing
+workload mapping     SA set, dataflow, split-K and tile order of each GEMM;
+                     movement policy of each handoff
 ```
 
-Because the modular placement policy requires exactly one SA and one FPGA, the
+The evaluation profile (evaluator per operation type, transfer cost model) is
+not searched. It is constant for one run. A parameter whose option list has one
+entry, such as the FPGA count, is not selected by the search.
+
+Because the modular assignment policy requires exactly one SA and one FPGA, the
 modular moves mutate the two fixed endpoints and never add or delete chiplets;
 `validate_atlas_architecture` enforces the invariant.
 
@@ -232,5 +236,9 @@ python -m main --run_mode run_sim_anneal \
 
 `sim_annealing` returns the same four values as before; in ATLAS mode the trace
 DataFrame carries `attrs["best_profile"]`, `attrs["best_profile_fingerprint"]`,
-and `attrs["candidate_profiles"]`.
+`attrs["best_workload_mapping"]`,
+`attrs["best_workload_mapping_fingerprint"]`, and
+`attrs["best_design_point"]`. The main run writes the design point to one file,
+`best_design_point_<run>_<timestamp>.json`, with an `architecture` section and
+a `workload_mapping` section. `--architecture_file` accepts that file.
 

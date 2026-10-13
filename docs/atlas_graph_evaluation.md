@@ -77,7 +77,7 @@ values:
     "gemm": "legacy_scale_sim_gemm_v1",
     "relu": "legacy_fpga_relu_v1"
   },
-  "placement_policy": "fixed_single_sa_single_fpga_v1",
+  "assignment_policy": "fixed_single_sa_single_fpga_v1",
   "movement_policy": "activation_boundary_v1",
   "transfer_model": "route_transfer_v1"
 }
@@ -85,7 +85,7 @@ values:
 
 The profile is selected per evaluation and its fingerprint is recorded with the
 results. All four selections are resolved through registries: evaluator,
-operation placement policy, tensor movement policy, and transfer cost model.
+operation assignment policy, tensor movement policy, and transfer cost model.
 
 A second, opt-in profile demonstrates the extension seam:
 
@@ -98,7 +98,7 @@ A second, opt-in profile demonstrates the extension seam:
     "relu": "placeholder_hls_relu_v0",
     "softmax": "placeholder_fpga_softmax_v0"
   },
-  "placement_policy": "fixed_single_sa_single_fpga_v1",
+  "assignment_policy": "fixed_single_sa_single_fpga_v1",
   "movement_policy": "activation_boundary_v1",
   "transfer_model": "route_transfer_v1"
 }
@@ -124,7 +124,7 @@ compute_latency_ns
 dynamic_energy_pj
 ```
 
-The executor owns operation identity, operation order, placement, tensor
+The executor owns operation identity, operation order, assignment, tensor
 residency, tensor movement, totals, and report formatting. Evaluators are
 replaceable: a new GEMM or non-GEMM model is a new registration plus its input
 adapter, not a new branch in the executor.
@@ -155,9 +155,9 @@ Evaluator input adapters translate this plan into the facts their model needs.
 The legacy GEMM input adapter maps it onto the SCALE-Sim `activation_from_dram`
 and `output_to_dram` flags. The executor contains no `relu` or `softmax` branch.
 
-## Operation Placement
+## Operation Assignment
 
-The first placement policy requires exactly one systolic-array endpoint and one
+The first assignment policy requires exactly one systolic-array endpoint and one
 FPGA endpoint:
 
 ```text
@@ -166,7 +166,7 @@ relu    -> the FPGA endpoint
 softmax -> the FPGA endpoint
 ```
 
-Operation placement is distinct from GEMM tile mapping. The existing Scheduler
+Operation assignment is distinct from GEMM tile mapping. The existing Scheduler
 still assigns the tiles of one GEMM across its SA group.
 
 ## Tensor Movement
@@ -229,14 +229,17 @@ supported for ATLAS graphs.
 - `system/utils/OperationEvaluator.py`: evaluator, input adapter, binding, and
   registry contracts.
 - `system/utils/EvaluationProfile.py`: profile loading and identity.
-- `system/utils/OperationPlacement.py`: operation-to-endpoint placement and
+- `system/utils/OperationAssignment.py`: operation-to-endpoint assignment and
   registry.
 - `system/utils/TensorMovement.py`: residency, movement plans, and registry.
 - `system/utils/TransferEstimator.py`: resolved-route transfer cost model and
   registry.
 - `system/utils/AtlasObjective.py`: replaceable objective models and the raw
   design point used by modular annealing.
-- `system/utils/AtlasAnnealingMoves.py`: modular architecture/profile moves.
+- `system/utils/WorkloadMapping.py`: the workload mapping of a design point.
+- `system/utils/DesignPointFile.py`: the one result file (architecture and
+  workload mapping).
+- `system/utils/AtlasAnnealingMoves.py`: architecture and workload-mapping moves.
 - `main.evaluate_atlas_graph`: the graph executor.
 - `main.evaluate_atlas_design_point`: the modular annealing objective bridge.
 - `network.evaluate_atlas_network`: reporting for ATLAS graphs.

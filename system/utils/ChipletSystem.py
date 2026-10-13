@@ -6,6 +6,7 @@ Global routing, interconnect info recorded here.
 from system.utils.SystolicArray import SystolicArray
 from system.utils.FpgaChiplet import FpgaChiplet
 from system.utils.ArchitectureModel import validate_modular_architecture
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from chiplet.n_utils import d2d_bw_calc, calculate_memory_bandwidth, get_sram_area_energy
 from config import print_info
 
@@ -235,6 +236,22 @@ class ChipletSystem:
         path.reverse()
 
         return path, dist_bw_weights[dst_id], dist_energy[dst_id] 
+
+    def link_cost(self, src_id: int, dst_id: int) -> tuple[float, float]:
+        """Return one directed physical link's (reciprocal bandwidth, energy/bit).
+
+        The reciprocal bandwidth is in ns per byte; the energy is in pJ per bit.
+        A missing link is an unsupported evaluation rather than a zero cost.
+        """
+        for neighbor, bandwidth_reciprocal, energy_pj_per_bit in self.interconnect_dict.get(
+            src_id, ()
+        ):
+            if neighbor == dst_id:
+                return bandwidth_reciprocal, energy_pj_per_bit
+        raise UnsupportedEvaluation(
+            f"no physical link between endpoints {src_id} and {dst_id}"
+        )
+
     def __process_3d_chiplets(self, base_die:SystolicArray, top_die:SystolicArray):
 
         assert self.interconnect_type == "3d" or self.interconnect_type == "2.5d_3d", \

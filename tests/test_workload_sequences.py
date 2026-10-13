@@ -285,12 +285,6 @@ class WorkloadSequenceTests(unittest.TestCase):
                     four,
                     intermediate_policy="direct_forward",
                 )
-                ideal_metrics = simulate_latency_energy(
-                    cache,
-                    make_test_architecture(),
-                    four,
-                    intermediate_policy="ideal_on_chip",
-                )
 
         single_latency, single_communication, single_sram, single_gemms, single_boundaries = single_metrics
         four_latency, four_communication, four_sram, four_gemms, four_boundaries = four_metrics
@@ -308,10 +302,6 @@ class WorkloadSequenceTests(unittest.TestCase):
         )
         expected_dram_words = 128 * 128 + 128 * 128 + 128 * 128
         expected_communication = expected_dram_words * 8 * DRAM_pj_per_bit["ddr5"]
-        expected_ideal_words = 6 * 128 * 128
-        expected_ideal_communication = (
-            expected_ideal_words * 8 * DRAM_pj_per_bit["ddr5"]
-        )
         self.assertAlmostEqual(single_communication, expected_communication)
         self.assertAlmostEqual(four_latency, single_latency * 4)
         self.assertAlmostEqual(four_communication, single_communication * 4)
@@ -319,15 +309,6 @@ class WorkloadSequenceTests(unittest.TestCase):
         single_total_energy = single_communication + single_sram + single_latency * 1000
         four_total_energy = four_communication + four_sram + four_latency * 1000
         self.assertAlmostEqual(four_total_energy, single_total_energy * 4)
-        ideal_latency, ideal_communication, _, _, ideal_boundaries = ideal_metrics
-        self.assertLess(ideal_latency, four_latency)
-        self.assertLess(ideal_communication, four_communication)
-        self.assertAlmostEqual(ideal_communication, expected_ideal_communication)
-        self.assertEqual(
-            [boundary.retained_bytes for boundary in ideal_boundaries],
-            [128 * 128] * 3,
-        )
-        self.assertTrue(all(not boundary.uses_dram for boundary in ideal_boundaries))
         for metric in four_gemms:
             self.assertEqual(
                 {

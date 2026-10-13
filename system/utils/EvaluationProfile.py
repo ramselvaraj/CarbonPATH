@@ -1,6 +1,6 @@
 """Evaluation profile: the named selection of models for one evaluation.
 
-A profile names operation evaluators, a placement policy, a tensor movement
+A profile names operation evaluators, an assignment policy, a tensor movement
 policy, and a transfer cost model. An evaluator selection may also carry the
 settings owned by that evaluator. Hardware values remain in the architecture.
 """
@@ -21,7 +21,7 @@ _REQUIRED_FIELDS = {
     "profile",
     "version",
     "evaluators",
-    "placement_policy",
+    "assignment_policy",
     "movement_policy",
     "transfer_model",
 }
@@ -43,7 +43,7 @@ class EvaluationProfile:
     name: str
     version: int
     evaluators: dict
-    placement_policy: str
+    assignment_policy: str
     movement_policy: str
     transfer_model: str
 
@@ -55,7 +55,7 @@ class EvaluationProfile:
             name=self.name,
             version=self.version,
             evaluators=self.evaluators,
-            placement_policy=self.placement_policy,
+            assignment_policy=self.assignment_policy,
             movement_policy=movement_policy,
             transfer_model=self.transfer_model,
         )
@@ -80,7 +80,7 @@ class EvaluationProfile:
             name=self.name,
             version=self.version,
             evaluators=evaluators,
-            placement_policy=self.placement_policy,
+            assignment_policy=self.assignment_policy,
             movement_policy=self.movement_policy,
             transfer_model=self.transfer_model,
         )
@@ -111,7 +111,7 @@ class EvaluationProfile:
                 operation_type: selection.canonical_value()
                 for operation_type, selection in sorted(self.evaluators.items())
             },
-            "placement_policy": self.placement_policy,
+            "assignment_policy": self.assignment_policy,
             "movement_policy": self.movement_policy,
             "transfer_model": self.transfer_model,
         }
@@ -165,7 +165,7 @@ def parse_evaluation_profile(entry):
             evaluator_id=evaluator_id,
             settings=deepcopy(settings),
         )
-    for field in ("placement_policy", "movement_policy", "transfer_model"):
+    for field in ("assignment_policy", "movement_policy", "transfer_model"):
         value = entry.get(field)
         if not isinstance(value, str) or not value:
             raise UnsupportedEvaluation(f"evaluation profile {field} must be a string")
@@ -173,7 +173,7 @@ def parse_evaluation_profile(entry):
         name=name,
         version=version,
         evaluators=parsed_evaluators,
-        placement_policy=entry["placement_policy"],
+        assignment_policy=entry["assignment_policy"],
         movement_policy=entry["movement_policy"],
         transfer_model=entry["transfer_model"],
     )

@@ -16,15 +16,6 @@
       "forwarded_bytes": 0,
       "dram_spilled_bytes": 65536
     },
-    "ideal_on_chip": {
-      "latency_ns": 15522.802166582946,
-      "communication_energy_pj": 95723520.0,
-      "sram_energy_pj": 6220989.97313536,
-      "selected_method": "ideal_on_chip",
-      "retained_bytes": 65536,
-      "forwarded_bytes": 0,
-      "dram_spilled_bytes": 0
-    },
     "local_sram": {
       "latency_ns": 16486.566872465297,
       "communication_energy_pj": 116695040.0,

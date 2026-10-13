@@ -1,5 +1,5 @@
 import argparse
-import json
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -8,6 +8,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from system.utils.DesignPointFile import latest_result_file, read_design_point
 
 
 def latest_file(directory, pattern):
@@ -26,11 +32,12 @@ def main():
     args = parser.parse_args()
 
     metrics_path = latest_file(args.run_dir, "sa_metrics_*.csv")
-    architecture_path = latest_file(args.run_dir, "best_arch_*.json")
+    architecture_path = latest_result_file(args.run_dir)
+    if architecture_path is None:
+        raise FileNotFoundError(f"No result file in {args.run_dir}")
     metrics = pd.read_csv(metrics_path).dropna(subset=["new_cost", "latency", "energy"])
     selected = metrics.loc[metrics["new_cost"].idxmin()]
-    with architecture_path.open() as file:
-        architecture = json.load(file)
+    architecture = read_design_point(architecture_path).architecture
 
     gemm_indices = sorted(
         int(column.split("_")[1])

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from chiplet.n_utils import calculate_system_metrics
 from main import (
     TensorAccessPlan,
     build_scheduler_system,
@@ -33,10 +34,10 @@ from system.utils.NonGemmEstimator import (
     PlaceholderSoftmaxInputAdapter,
 )
 from system.utils.OperationEvaluator import EvaluatorRegistry
-from system.utils.OperationPlacement import (
-    AllSystolicArraysSingleFpgaPlacement,
-    FixedSingleSaSingleFpgaPlacement,
-    build_placement_policy,
+from system.utils.OperationAssignment import (
+    AllSystolicArraysSingleFpgaAssignment,
+    FixedSingleSaSingleFpgaAssignment,
+    build_assignment_policy,
 )
 from system.utils.SimulationCache import SimulationCache
 from system.utils.Simulator import Simulator
@@ -56,13 +57,15 @@ SOFTMAX_FIXTURE = Path("cfg/examples/atlas/dense_softmax.graph_dump.json")
 MIXED_FIXTURE = Path("cfg/examples/atlas/dense_relu_softmax.graph_dump.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 PLACEHOLDER_PROFILE = Path("cfg/profiles/placeholder_fpga_ops_v0.json")
+MULTI_SA_PROFILE = Path("cfg/profiles/atlas_multi_sa_fpga_v1.json")
+ONE_SA_FIXTURE = Path("tests/fixtures/dense_relu_funnel_one_sa_pointwise.json")
 
 EXPECTED_SHAPES = [(128, 128, 1024), (128, 1024, 512), (128, 512, 256), (128, 256, 64)]
 FUNNEL_FINGERPRINT = "810bd39b27e0"
 SOFTMAX_FINGERPRINT = "88cd5accb4ca"
 MIXED_FIXTURE_FINGERPRINT = "abf1849faedc"
-LEGACY_PROFILE_FINGERPRINT = "8f477eb548ff"
-PLACEHOLDER_PROFILE_FINGERPRINT = "dfcbcb692276"
+LEGACY_PROFILE_FINGERPRINT = "b3f4a54992ab"
+PLACEHOLDER_PROFILE_FINGERPRINT = "90ec76a679be"
 
 GOLDEN = {
     "latency_ns": 133648.7947773606,
@@ -316,7 +319,7 @@ class EvaluationProfileTests(unittest.TestCase):
         self.assertEqual(selected.movement_policy, "direct_forward_v1")
         self.assertEqual(original.movement_policy, "activation_boundary_v1")
         self.assertEqual(selected.evaluators, original.evaluators)
-        self.assertEqual(selected.placement_policy, original.placement_policy)
+        self.assertEqual(selected.assignment_policy, original.assignment_policy)
         self.assertEqual(selected.transfer_model, original.transfer_model)
 
     def test_unknown_operation_type_is_unsupported(self):
@@ -338,7 +341,7 @@ class EvaluationProfileTests(unittest.TestCase):
                         },
                     }
                 },
-                "placement_policy": "fixed_single_sa_single_fpga_v1",
+                "assignment_policy": "fixed_single_sa_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
                 "transfer_model": "route_transfer_v1",
             }
@@ -427,17 +430,17 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(binding.evaluator, binding.input_adapter)
 
-    def test_placement_policy_resolves_by_id(self):
+    def test_assignment_policy_resolves_by_id(self):
         system = SimpleNamespace(core_dict={0: object()}, fpga_chiplet_dict={1: object()})
-        policy = build_placement_policy("fixed_single_sa_single_fpga_v1", system)
+        policy = build_assignment_policy("fixed_single_sa_single_fpga_v1", system)
         self.assertEqual(policy.endpoint_for("gemm").endpoint_id, 0)
         self.assertEqual(policy.endpoint_for("relu").endpoint_kind, "fpga")
         self.assertEqual(policy.endpoint_for("softmax").endpoint_kind, "fpga")
 
-    def test_unknown_placement_policy_is_unsupported(self):
+    def test_unknown_assignment_policy_is_unsupported(self):
         system = SimpleNamespace(core_dict={0: object()}, fpga_chiplet_dict={1: object()})
         with self.assertRaises(UnsupportedEvaluation):
-            build_placement_policy("nope", system)
+            build_assignment_policy("nope", system)
 
     def test_movement_policy_resolves_by_id(self):
         service = build_movement_service(
@@ -450,7 +453,7 @@ class RegistryTests(unittest.TestCase):
             build_movement_service("nope", TransferEstimator())
 
     def test_original_gemm_memory_policies_resolve_by_id(self):
-        for policy in ("cold_dram", "ideal_on_chip", "local_sram", "direct_forward"):
+        for policy in ("cold_dram", "local_sram", "direct_forward"):
             with self.subTest(policy=policy):
                 service = build_movement_service(f"{policy}_v1")
                 self.assertTrue(service.requires_prepared_operations)
@@ -465,10 +468,10 @@ class RegistryTests(unittest.TestCase):
             build_transfer_cost_model("nope")
 
 
-class PlacementTests(unittest.TestCase):
+class AssignmentTests(unittest.TestCase):
     def test_fixed_policy_places_gemm_and_relu(self):
         system = SimpleNamespace(core_dict={0: object()}, fpga_chiplet_dict={1: object()})
-        policy = FixedSingleSaSingleFpgaPlacement(system)
+        policy = FixedSingleSaSingleFpgaAssignment(system)
         self.assertEqual(policy.endpoint_for("gemm").endpoint_id, 0)
         self.assertEqual(policy.endpoint_for("relu").endpoint_kind, "fpga")
 
@@ -477,7 +480,7 @@ class PlacementTests(unittest.TestCase):
             core_dict={0: object(), 1: object()}, fpga_chiplet_dict={2: object()}
         )
         with self.assertRaises(UnsupportedEvaluation):
-            FixedSingleSaSingleFpgaPlacement(system)
+            FixedSingleSaSingleFpgaAssignment(system)
 
     def test_all_sa_policy_returns_the_complete_sa_group(self):
         system = SimpleNamespace(
@@ -485,14 +488,14 @@ class PlacementTests(unittest.TestCase):
             fpga_chiplet_dict={5: object()},
         )
 
-        placement = AllSystolicArraysSingleFpgaPlacement(system).endpoint_for("gemm")
+        assignment = AllSystolicArraysSingleFpgaAssignment(system).endpoint_for("gemm")
 
-        self.assertEqual(placement.endpoint_ids, (0, 2, 4))
-        self.assertIsNone(placement.endpoint_id)
+        self.assertEqual(assignment.endpoint_ids, (0, 2, 4))
+        self.assertIsNone(assignment.endpoint_id)
 
     def test_all_sa_policy_allows_an_sa_only_gemm_system(self):
         system = SimpleNamespace(core_dict={0: object(), 1: object()}, fpga_chiplet_dict={})
-        policy = AllSystolicArraysSingleFpgaPlacement(system)
+        policy = AllSystolicArraysSingleFpgaAssignment(system)
 
         self.assertEqual(policy.endpoint_for("gemm").endpoint_ids, (0, 1))
         with self.assertRaisesRegex(UnsupportedEvaluation, "requires an FPGA"):
@@ -524,7 +527,7 @@ class AtlasEvaluationTests(unittest.TestCase):
         pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_path, index=False)
         return SimulationCache(cache_path, simulator_dir=directory.name)
 
-    def _evaluate(self, graph=None, profile=None):
+    def _evaluate(self, graph=None, profile=None, architecture=None):
         cache = self._cache()
         original = Simulator.simulate_single_core
         with patch.object(
@@ -534,9 +537,27 @@ class AtlasEvaluationTests(unittest.TestCase):
             side_effect=original,
         ) as simulate_core:
             evaluation = evaluate_atlas_network(
-                graph or self.graph, self.architecture, cache, profile=profile
+                graph or self.graph,
+                architecture or self.architecture,
+                cache,
+                profile=profile,
             )
         return evaluation, simulate_core
+
+    @staticmethod
+    def _multi_sa_architecture():
+        architecture = _load(ARCHITECTURE)
+        architecture["Chiplet_3"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"]["Chiplet_3"] = 4
+        architecture["pkg"]["inter_pkg_conn"].append(
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet",
+            }
+        )
+        return architecture
 
     def _assert_close(self, value, expected):
         self.assertLessEqual(abs(value - expected), abs(expected) * 1e-9 + 1e-6)
@@ -564,7 +585,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                         },
                     }
                 },
-                "placement_policy": "fixed_single_sa_single_fpga_v1",
+                "assignment_policy": "fixed_single_sa_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
                 "transfer_model": "route_transfer_v1",
             }
@@ -588,7 +609,7 @@ class AtlasEvaluationTests(unittest.TestCase):
         self.assertEqual(mapping["assign_workload_in_ascending_order"], 1)
         self.assertEqual(self.architecture["WL_mapping"], original_mapping)
 
-    def test_multi_sa_gemm_uses_the_complete_placement_group(self):
+    def test_multi_sa_gemm_uses_the_complete_assignment_group(self):
         graph = parse_atlas_graph([_gemm_node()], "multi_sa_gemm")
         architecture = _load(ARCHITECTURE)
         architecture["Chiplet_3"] = copy.deepcopy(architecture["Chiplet_1"])
@@ -606,7 +627,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                 "profile": "multi_sa",
                 "version": 1,
                 "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
-                "placement_policy": "all_sas_single_fpga_v1",
+                "assignment_policy": "all_sas_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
                 "transfer_model": "route_transfer_v1",
             }
@@ -660,7 +681,6 @@ class AtlasEvaluationTests(unittest.TestCase):
         }
         expected = {
             "cold_dram": ("cold_dram", True),
-            "ideal_on_chip": ("ideal_on_chip", False),
             "local_sram": ("local_sram", False),
             "direct_forward": ("local_sram", False),
         }
@@ -671,7 +691,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                         "profile": f"mapped_gemm_{policy}",
                         "version": 1,
                         "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
-                        "placement_policy": "all_sas_single_fpga_v1",
+                        "assignment_policy": "all_sas_single_fpga_v1",
                         "movement_policy": f"{policy}_v1",
                         "transfer_model": "route_transfer_v1",
                     }
@@ -810,6 +830,162 @@ class AtlasEvaluationTests(unittest.TestCase):
     def test_legacy_network_rejects_evaluation_profile(self):
         with self.assertRaises(ValueError):
             evaluate_network(SimpleNamespace(), {}, None, profile=object())
+
+
+class DistributedMultiSaTests(unittest.TestCase):
+    def setUp(self):
+        self.architecture = _load(ARCHITECTURE)
+        self.graph = load_atlas_graph(FIXTURE)
+        self.profile = load_evaluation_profile(MULTI_SA_PROFILE)
+
+    def _cache(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        cache_path = Path(directory.name) / "cache.csv"
+        pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_path, index=False)
+        return SimulationCache(cache_path, simulator_dir=directory.name)
+
+    def _evaluate(self, architecture=None, profile=None):
+        original = Simulator.simulate_single_core
+        with patch.object(
+            Simulator,
+            "simulate_single_core",
+            autospec=True,
+            side_effect=original,
+        ):
+            return evaluate_atlas_network(
+                self.graph,
+                architecture or self.architecture,
+                self._cache(),
+                profile=profile or self.profile,
+            )
+
+    def _evaluate_graph(self, architecture=None, profile=None):
+        architecture = architecture or self.architecture
+        original = Simulator.simulate_single_core
+        with patch.object(
+            Simulator,
+            "simulate_single_core",
+            autospec=True,
+            side_effect=original,
+        ):
+            return evaluate_atlas_graph(
+                self._cache(),
+                architecture,
+                self.graph,
+                profile=profile or self.profile,
+                transfer_model=architecture.get("transfer_model", {}),
+            )
+
+    @staticmethod
+    def _multi_sa_architecture():
+        architecture = _load(ARCHITECTURE)
+        architecture["Chiplet_3"] = copy.deepcopy(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"]["Chiplet_3"] = 4
+        architecture["pkg"]["inter_pkg_conn"].append(
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet",
+            }
+        )
+        return architecture
+
+    def _assert_close(self, value, expected):
+        self.assertLessEqual(abs(value - expected), abs(expected) * 1e-9 + 1e-6)
+
+    def test_distributed_one_sa_matches_the_frozen_reference(self):
+        fixture = _load(ONE_SA_FIXTURE)
+        evaluation = self._evaluate_graph()
+        power, _, _ = calculate_system_metrics(self.architecture)
+        latency_ns = evaluation.latency_ns
+        summary = {
+            "latency_ns": latency_ns,
+            "baseline_energy_pj": power * latency_ns * 1000,
+            "compute_energy_pj": evaluation.compute_energy_pj,
+            "movement_energy_pj": evaluation.movement_energy_pj,
+            "total_energy_pj": (
+                power * latency_ns * 1000
+                + evaluation.compute_energy_pj
+                + evaluation.movement_energy_pj
+            ),
+        }
+
+        for key in (
+            "latency_ns",
+            "baseline_energy_pj",
+            "compute_energy_pj",
+            "movement_energy_pj",
+            "total_energy_pj",
+        ):
+            self._assert_close(summary[key], fixture["summary"][key])
+
+        handoffs = [r for r in evaluation.results if r.movement is not None]
+        self.assertEqual(len(handoffs), len(fixture["handoffs"]))
+        for result, expected in zip(handoffs, fixture["handoffs"]):
+            movement = result.movement
+            self.assertEqual(movement.source_endpoint, expected["source_endpoint"])
+            self.assertEqual(
+                movement.destination_endpoint, expected["destination_endpoint"]
+            )
+            self.assertEqual(movement.logical_bytes, expected["logical_bytes"])
+            self.assertEqual(movement.physical_bytes, expected["physical_bytes"])
+            self._assert_close(
+                movement.charged_latency_ns, expected["charged_latency_ns"]
+            )
+            self._assert_close(
+                movement.charged_energy_pj, expected["charged_energy_pj"]
+            )
+
+    def test_two_sa_gemm_relu_graph_executes(self):
+        evaluation = self._evaluate_graph(architecture=self._multi_sa_architecture())
+
+        self.assertEqual(evaluation.results[0].endpoint_ids, (0, 2))
+        for result in evaluation.results:
+            if result.movement is None:
+                continue
+            self.assertEqual(result.movement.method, "distributed_route")
+            self.assertGreaterEqual(
+                result.movement.physical_bytes, result.movement.logical_bytes
+            )
+            self.assertEqual(
+                sum(s.byte_count for s in result.movement.transfer_slices),
+                result.movement.physical_bytes,
+            )
+
+    def test_boundaries_reconstruct_every_handoff_total(self):
+        evaluation = self._evaluate(architecture=self._multi_sa_architecture())
+        boundaries = evaluation.boundaries
+
+        self.assertFalse(boundaries.empty)
+        for _, group in boundaries.groupby("boundary_index"):
+            first = group.iloc[0]
+            self.assertEqual(
+                group["slice_bytes"].sum(), first["handoff_physical_bytes"]
+            )
+            self.assertAlmostEqual(
+                group["slice_energy_pj"].sum(), first["handoff_energy_pj"]
+            )
+            self.assertAlmostEqual(
+                group["slice_latency_ns"].max(), first["handoff_latency_ns"]
+            )
+            self.assertTrue(
+                (group["physical_bytes"] == first["handoff_physical_bytes"]).all()
+            )
+            self.assertTrue(
+                (group["logical_bytes"] == first["handoff_logical_bytes"]).all()
+            )
+
+    def test_gemm_output_to_fpga_unique_slices_cover_the_tensor_once(self):
+        evaluation = self._evaluate_graph()
+
+        for result in evaluation.results:
+            movement = result.movement
+            if movement is None:
+                continue
+            if movement.source_endpoint == 0 and movement.destination_endpoint == 1:
+                self.assertEqual(movement.physical_bytes, movement.logical_bytes)
 
 
 if __name__ == "__main__":

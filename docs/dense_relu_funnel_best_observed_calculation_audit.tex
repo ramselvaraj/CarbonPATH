@@ -1,0 +1,429 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.68in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[table]{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{pdflscape}
+
+\definecolor{navy}{HTML}{17324D}
+\definecolor{blue}{HTML}{1677A8}
+\definecolor{paleblue}{HTML}{EAF5FA}
+\definecolor{palegreen}{HTML}{EAF6EF}
+\definecolor{green}{HTML}{26734D}
+\definecolor{graytext}{HTML}{4C5965}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.42em}
+\renewcommand{\arraystretch}{1.18}
+\setlist[itemize]{leftmargin=1.4em,itemsep=0.25em,topsep=0.25em}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\footnotesize\color{graytext} Dense--ReLU calculation audit}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\newcommand{\ns}{\,\mathrm{ns}}
+\newcommand{\pj}{\,\mathrm{pJ}}
+\newcommand{\nj}{\,\mathrm{nJ}}
+\newcommand{\us}{\,\mu\mathrm{s}}
+\newcommand{\uj}{\,\mu\mathrm{J}}
+\newenvironment{callout}[1]
+  {\begin{center}\begin{minipage}{0.93\linewidth}\color{navy}
+   \hrule height 1pt\vspace{0.35em}\textbf{#1}\par\smallskip\color{black}}
+  {\vspace{0.25em}\color{navy}\hrule height 1pt\end{minipage}\end{center}}
+\newenvironment{resultbox}[1]
+  {\begin{center}\begin{minipage}{0.93\linewidth}\color{green}
+   \hrule height 1pt\vspace{0.35em}\textbf{#1}\par\smallskip\color{black}}
+  {\vspace{0.25em}\color{green}\hrule height 1pt\end{minipage}\end{center}}
+\newcommand{\sectionbar}[1]{\vspace{0.5em}\noindent
+  \colorbox{navy}{\parbox{\dimexpr\linewidth-2\fboxsep\relax}{
+  \color{white}\large\bfseries #1}}\par\vspace{0.35em}}
+\newcommand{\layerbar}[1]{\vspace{0.35em}\noindent
+  \colorbox{blue}{\parbox{\dimexpr\linewidth-2\fboxsep\relax}{
+  \color{white}\bfseries #1}}\par\vspace{0.2em}}
+\newcolumntype{L}{>{\raggedright\arraybackslash}p{0.24\linewidth}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\begin{document}
+\begin{center}
+{\color{navy}\LARGE\bfseries Dense--ReLU Funnel\\[0.2em]Calculation Audit}\par
+\end{center}
+
+\sectionbar{Network}
+\[
+[128,128]\rightarrow \mathrm{GEMM}_{1024}\rightarrow\mathrm{ReLU}
+\rightarrow\mathrm{GEMM}_{512}\rightarrow\mathrm{ReLU}
+\rightarrow\mathrm{GEMM}_{256}\rightarrow\mathrm{ReLU}
+\rightarrow\mathrm{GEMM}_{64}\rightarrow[128,64]
+\]
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\toprule
+\textbf{Part} & \textbf{Selected value} \\
+\midrule
+SA & 7 nm; $128\times128$ array; 1024 KiB SRAM; $1.00$ GHz; $4.48$ W \\
+FPGA & 7 nm; 10,000 CLBs; 200 BRAMs; 500 DSPs; $400.00$ MHz; $2.00$ W \\
+ReLU & 2 CLBs/lane; 128-lane cap; $0.10$ pJ/element \\
+Memory/package & HBM3 with 16 SA channels; 2.5D EMIB; UCIe Advanced \\
+Mapping & Output-stationary; ascending assignment; Split-K disabled \\
+Search constraint & Exactly one SA chiplet and one FPGA chiplet \\
+\bottomrule
+\end{tabularx}
+
+\sectionbar{Where the fixed numbers come from}
+\begin{tabularx}{\linewidth}{@{}p{0.23\linewidth}p{0.27\linewidth}Y@{}}
+\toprule
+\textbf{Value} & \textbf{Meaning} & \textbf{Source in this architecture} \\
+\midrule
+$1.00\ns$/SA cycle & SA clock period & $1/(1.00\ \mathrm{GHz})$ \\
+$614$ words/cycle & DRAM service rate & HBM3 with 16 channels assigned to the SA \\
+$3.00\pj$/bit & DRAM energy & HBM3 energy setting \\
+$2.50\ns$/FPGA cycle & FPGA clock period & $1/(400.00\ \mathrm{MHz})$ \\
+$2$ CLBs/lane; cap $128$ & ReLU parallelism & Selected FPGA ReLU implementation \\
+$0.10\pj$/element & ReLU dynamic energy & Selected FPGA ReLU implementation \\
+$2.00\ns$ & Transfer setup & Saved transfer-model setup latency \\
+$0.50\ns$/hop & Router/hop delay & Saved transfer-model per-hop latency \\
+$1$ hop & SA-to-FPGA route length & Direct route in the selected package \\
+$138.43$ bytes/ns & Effective link throughput & Saved route throughput, shown rounded \\
+$0.25\pj$/bit & Link energy & UCIe Advanced energy setting \\
+\bottomrule
+\end{tabularx}
+
+\newpage
+\sectionbar{1. SCALE-Sim input and output}
+CarbonPATH sends each tile below to SCALE-Sim and receives the cycle count in
+the last column.\par\smallskip
+\begin{tabularx}{\linewidth}{@{}l l Y r@{}}
+\toprule
+\textbf{GEMM} & \textbf{Network shape $[M,K,N]$} & \textbf{SCALE-Sim tile input} & \textbf{Output cycles} \\
+\midrule
+expand & $[128,128,1024]$ & $8\times[128,128,128]$ & 3048 \\
+contract1 & $[128,1024,512]$ & $4\times[128,1024,128]$ & 5108 \\
+contract2 & $[128,512,256]$ & $2\times[128,512,128]$ & 1530 \\
+head & $[128,256,64]$ & $1\times[128,256,64]$ & 509 \\
+\bottomrule
+\end{tabularx}
+\textbf{Shared SCALE-Sim configuration:} $128\times128$ SA, 1024 KiB SRAM,
+output-stationary dataflow, $614$ DRAM words/cycle, $1.00$ GHz.
+
+\sectionbar{2. How each number is calculated}
+
+\textbf{A. GEMM latency}
+
+\begin{tabularx}{\linewidth}{@{}p{0.18\linewidth}Y@{}}
+$C_{\mathrm{SCALE}}$ & Cycles returned by SCALE-Sim. \\
+$W_{\mathrm{DRAM}}$ & One-byte words read from or written to DRAM. \\
+$B_{\mathrm{DRAM}}$ & DRAM rate: $614$ words/cycle. \\
+$t_{\mathrm{SA}}$ & SA cycle time: $1.00\ns$/cycle. \\
+\end{tabularx}
+
+\begin{align*}
+C_{\mathrm{DRAM}} &= W_{\mathrm{DRAM}}/B_{\mathrm{DRAM}},\\
+L_{\mathrm{array}} &= C_{\mathrm{SCALE}}\,t_{\mathrm{SA}},\\
+L_{\mathrm{DRAM}} &= C_{\mathrm{DRAM}}\,t_{\mathrm{SA}},\\
+L_{\mathrm{GEMM}} &= L_{\mathrm{array}}+L_{\mathrm{DRAM}}.
+\end{align*}
+
+Cycles are converted to nanoseconds before the two latency terms are added.
+At $1.00$ GHz, one SA cycle happens to equal $1.00\ns$.
+
+\textbf{GEMM dynamic energy}
+\[
+E_{\mathrm{GEMM,dyn}}
+=W_{\mathrm{DRAM}}\times8\ \mathrm{bits/word}\times3.00\pj/\mathrm{bit}
++E_{\mathrm{SRAM}}.
+\]
+$E_{\mathrm{SRAM}}$ is the SRAM-energy value returned by CarbonPATH's SRAM
+model for that GEMM.
+
+\newpage
+\textbf{B. FPGA ReLU}
+
+Let $N_{\mathrm{elem}}$ be the number of tensor elements and
+$N_{\mathrm{lanes}}$ the number processed in parallel:
+\begin{align*}
+N_{\mathrm{lanes}}
+ &=\min\!\left(\left\lfloor\frac{10000\ \mathrm{CLBs}}
+ {2\ \mathrm{CLBs/lane}}\right\rfloor,128\right)=128,\\
+C_{\mathrm{ReLU}}
+ &=\left\lceil N_{\mathrm{elem}}/N_{\mathrm{lanes}}\right\rceil,\\
+t_{\mathrm{FPGA}}
+ &=1/(400.00\ \mathrm{MHz})=2.50\ns/\mathrm{cycle},\\
+L_{\mathrm{ReLU}}
+ &=C_{\mathrm{ReLU}}\,t_{\mathrm{FPGA}},\\
+E_{\mathrm{ReLU,dyn}}
+ &=N_{\mathrm{elem}}\times0.10\pj/\mathrm{element}.
+\end{align*}
+
+\textbf{C. SA--FPGA movement}
+
+Let $D$ be tensor bytes and $H$ be route hops.  Here $H=1$ for every crossing.
+\begin{align*}
+L_{\mathrm{move}}
+ &=L_{\mathrm{setup}}+H L_{\mathrm{hop}}+D/B_{\mathrm{link}}\\
+ &=2.00\ns+(1)(0.50\ns)+D/B_{\mathrm{link}},\\
+E_{\mathrm{move}}
+ &=D\times8\ \mathrm{bits/byte}\times0.25\pj/\mathrm{bit}.
+\end{align*}
+The first two latency terms are the saved transfer setup and one-hop delay.
+The last term is serialization time: tensor bytes divided by link throughput.
+Layer tables use the saved throughput before rounding.
+
+\textbf{D. Complete layer}
+\begin{align*}
+L_i &=L_{i,\mathrm{operation}}+L_{i,\mathrm{move}},\\
+E_i &=E_{i,\mathrm{baseline}}+E_{i,\mathrm{dynamic}}+E_{i,\mathrm{move}},\\
+E_{i,\mathrm{baseline}}&=P_{\mathrm{system}}L_i.
+\end{align*}
+$P_{\mathrm{system}}$ is SA power plus FPGA power; its displayed value is
+$4.48+2.00=6.48$ W.  Since W$\times$ns equals nJ, the last equation directly
+produces nJ.
+
+\sectionbar{3. Layer-by-layer audit}
+\layerbar{Layer 1 \quad GEMM expand \quad $[128,128,1024]$}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{SCALE-Sim I/O} & $8\times[128,128,128]\rightarrow3048$ cycles \\
+\textbf{SA cycle time} & $1/(1.00\ \mathrm{GHz})=1.00\ns$/cycle \\
+\textbf{Array time} & $3048$ cycles $\times1.00\ns$/cycle $=3048.00\ns$ \\
+\textbf{DRAM words} & $131{,}072$ activation $+131{,}072$ weights $+0$ output $=262{,}144$ \\
+\textbf{DRAM cycles} & $262{,}144\ \mathrm{words}/(614\ \mathrm{words/cycle})=426.94$ cycles \\
+\textbf{DRAM time} & $426.94$ cycles $\times1.00\ns$/cycle $=426.94\ns$ \\
+\textbf{Operation time} & $3048.00\ns+426.94\ns=3474.94\ns$ \\
+\textbf{Incoming move} & $0$ bytes $\rightarrow0.00\ns,\ 0.00\nj$ \\
+\textbf{Dynamic energy} & DRAM $6291.46\nj$ $+$ SRAM $9953.58\nj$ $=16245.04\nj$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times3474.94\ns\ \Longrightarrow\ 22500.27\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 1 result}
+$L_1=3474.94\ns$ \hfill $E_1:\ 22500.27+16245.04+0.00\ \Longrightarrow\ 38745.31\nj$
+\end{resultbox}
+
+\newpage
+\layerbar{Layer 2 \quad ReLU \quad 131,072 elements}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{Parallel lanes} & $\min(10000/2,128)=128$ lanes \\
+\textbf{ReLU cycles} & $\lceil131{,}072\ \mathrm{elements}/128\ \mathrm{lanes}\rceil=1024$ cycles \\
+\textbf{FPGA cycle time} & $1/(400.00\ \mathrm{MHz})=2.50\ns$/cycle \\
+\textbf{Operation time} & $1024$ cycles $\times2.50\ns$/cycle $=2560.00\ns$ \\
+\textbf{Move inputs} & $D=131{,}072$ bytes; $H=1$ hop \\
+\textbf{Serialization} & $131{,}072/B_{\mathrm{link}}=946.88\ns$ \\
+\textbf{Move latency} & $2.00+0.50+946.88=949.38\ns$ \\
+\textbf{Move energy} & $131{,}072\times8\times0.25=262144.00\pj=262.14\nj$ \\
+\textbf{Dynamic energy} & $131{,}072\times0.10=13107.20\pj=13.11\nj$ \\
+\textbf{Total time} & $2560.00+949.38=3509.38\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times3509.38\ns\ \Longrightarrow\ 22723.22\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 2 result}
+$L_2=3509.38\ns$ \hfill $E_2:\ 22723.22+13.11+262.14\ \Longrightarrow\ 22998.47\nj$
+\end{resultbox}
+
+\newpage
+\layerbar{Layer 3 \quad GEMM contract1 \quad $[128,1024,512]$}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{SCALE-Sim I/O} & $4\times[128,1024,128]\rightarrow5108$ cycles \\
+\textbf{SA cycle time} & $1/(1.00\ \mathrm{GHz})=1.00\ns$/cycle \\
+\textbf{Array time} & $5108$ cycles $\times1.00\ns$/cycle $=5108.00\ns$ \\
+\textbf{DRAM words} & $0$ activation $+524{,}288$ weights $+0$ output $=524{,}288$ \\
+\textbf{DRAM cycles} & $524{,}288\ \mathrm{words}/(614\ \mathrm{words/cycle})=853.89$ cycles \\
+\textbf{DRAM time} & $853.89$ cycles $\times1.00\ns$/cycle $=853.89\ns$ \\
+\textbf{Operation time} & $5108.00\ns+853.89\ns=5961.89\ns$ \\
+\textbf{Serialization} & $131{,}072/B_{\mathrm{link}}=946.88\ns$ \\
+\textbf{Move latency} & $2.00+0.50+946.88=949.38\ns$ \\
+\textbf{Move energy} & $131{,}072\times8\times0.25=262.14\nj$ \\
+\textbf{Dynamic energy} & DRAM $12582.91\nj$ $+$ SRAM $39814.34\nj$ $=52397.25\nj$ \\
+\textbf{Total time} & $5961.89+949.38=6911.27\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times6911.27\ns\ \Longrightarrow\ 44750.45\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 3 result}
+$L_3=6911.27\ns$ \hfill $E_3:\ 44750.45+52397.25+262.14\ \Longrightarrow\ 97409.84\nj$
+\end{resultbox}
+
+\layerbar{Layer 4 \quad ReLU \quad 65,536 elements}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{Parallel lanes} & $\min(10000/2,128)=128$ lanes \\
+\textbf{ReLU cycles} & $\lceil65{,}536\ \mathrm{elements}/128\ \mathrm{lanes}\rceil=512$ cycles \\
+\textbf{FPGA cycle time} & $1/(400.00\ \mathrm{MHz})=2.50\ns$/cycle \\
+\textbf{Operation time} & $512$ cycles $\times2.50\ns$/cycle $=1280.00\ns$ \\
+\textbf{Move inputs} & $D=65{,}536$ bytes; $H=1$ hop \\
+\textbf{Serialization} & $65{,}536/B_{\mathrm{link}}=473.44\ns$ \\
+\textbf{Move latency} & $2.00+0.50+473.44=475.94\ns$ \\
+\textbf{Move energy} & $65{,}536\times8\times0.25=131072.00\pj=131.07\nj$ \\
+\textbf{Dynamic energy} & $65{,}536\times0.10=6553.60\pj=6.55\nj$ \\
+\textbf{Total time} & $1280.00+475.94=1755.94\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times1755.94\ns\ \Longrightarrow\ 11369.70\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 4 result}
+$L_4=1755.94\ns$ \hfill $E_4:\ 11369.70+6.55+131.07\ \Longrightarrow\ 11507.33\nj$
+\end{resultbox}
+
+\newpage
+\layerbar{Layer 5 \quad GEMM contract2 \quad $[128,512,256]$}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{SCALE-Sim I/O} & $2\times[128,512,128]\rightarrow1530$ cycles \\
+\textbf{SA cycle time} & $1/(1.00\ \mathrm{GHz})=1.00\ns$/cycle \\
+\textbf{Array time} & $1530$ cycles $\times1.00\ns$/cycle $=1530.00\ns$ \\
+\textbf{DRAM words} & $0$ activation $+131{,}072$ weights $+0$ output $=131{,}072$ \\
+\textbf{DRAM cycles} & $131{,}072\ \mathrm{words}/(614\ \mathrm{words/cycle})=213.47$ cycles \\
+\textbf{DRAM time} & $213.47$ cycles $\times1.00\ns$/cycle $=213.47\ns$ \\
+\textbf{Operation time} & $1530.00\ns+213.47\ns=1743.47\ns$ \\
+\textbf{Serialization} & $65{,}536/B_{\mathrm{link}}=473.44\ns$ \\
+\textbf{Move latency} & $2.00+0.50+473.44=475.94\ns$ \\
+\textbf{Move energy} & $65{,}536\times8\times0.25=131.07\nj$ \\
+\textbf{Dynamic energy} & DRAM $3145.73\nj$ $+$ SRAM $9953.58\nj$ $=13099.31\nj$ \\
+\textbf{Total time} & $1743.47+475.94=2219.41\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times2219.41\ns\ \Longrightarrow\ 14370.69\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 5 result}
+$L_5=2219.41\ns$ \hfill $E_5:\ 14370.69+13099.31+131.07\ \Longrightarrow\ 27601.07\nj$
+\end{resultbox}
+
+\layerbar{Layer 6 \quad ReLU \quad 32,768 elements}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{Parallel lanes} & $\min(10000/2,128)=128$ lanes \\
+\textbf{ReLU cycles} & $\lceil32{,}768\ \mathrm{elements}/128\ \mathrm{lanes}\rceil=256$ cycles \\
+\textbf{FPGA cycle time} & $1/(400.00\ \mathrm{MHz})=2.50\ns$/cycle \\
+\textbf{Operation time} & $256$ cycles $\times2.50\ns$/cycle $=640.00\ns$ \\
+\textbf{Move inputs} & $D=32{,}768$ bytes; $H=1$ hop \\
+\textbf{Serialization} & $32{,}768/B_{\mathrm{link}}=236.72\ns$ \\
+\textbf{Move latency} & $2.00+0.50+236.72=239.22\ns$ \\
+\textbf{Move energy} & $32{,}768\times8\times0.25=65536.00\pj=65.54\nj$ \\
+\textbf{Dynamic energy} & $32{,}768\times0.10=3276.80\pj=3.28\nj$ \\
+\textbf{Total time} & $640.00+239.22=879.22\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times879.22\ns\ \Longrightarrow\ 5692.95\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 6 result}
+$L_6=879.22\ns$ \hfill $E_6:\ 5692.95+3.28+65.54\ \Longrightarrow\ 5761.76\nj$
+\end{resultbox}
+
+\newpage
+\layerbar{Layer 7 \quad GEMM head \quad $[128,256,64]$}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\textbf{SCALE-Sim I/O} & $1\times[128,256,64]\rightarrow509$ cycles \\
+\textbf{SA cycle time} & $1/(1.00\ \mathrm{GHz})=1.00\ns$/cycle \\
+\textbf{Array time} & $509$ cycles $\times1.00\ns$/cycle $=509.00\ns$ \\
+\textbf{DRAM words} & $0$ activation $+16{,}384$ weights $+8{,}192$ output $=24{,}576$ \\
+\textbf{DRAM cycles} & $24{,}576\ \mathrm{words}/(614\ \mathrm{words/cycle})=40.03$ cycles \\
+\textbf{DRAM time} & $40.03$ cycles $\times1.00\ns$/cycle $=40.03\ns$ \\
+\textbf{Operation time} & $509.00\ns+40.03\ns=549.03\ns$ \\
+\textbf{Serialization} & $32{,}768/B_{\mathrm{link}}=236.72\ns$ \\
+\textbf{Move latency} & $2.00+0.50+236.72=239.22\ns$ \\
+\textbf{Move energy} & $32{,}768\times8\times0.25=65.54\nj$ \\
+\textbf{Dynamic energy} & DRAM $589.82\nj$ $+$ SRAM $1244.20\nj$ $=1834.02\nj$ \\
+\textbf{Total time} & $549.03+239.22=788.25\ns$ \\
+\textbf{Baseline energy} & $P_{\mathrm{system}}\times788.25\ns\ \Longrightarrow\ 5103.89\nj$ \\
+\bottomrule
+\end{tabularx}
+\begin{resultbox}{Layer 7 result}
+$L_7=788.25\ns$ \hfill $E_7:\ 5103.89+1834.02+65.54\ \Longrightarrow\ 7003.45\nj$
+\end{resultbox}
+
+\clearpage
+\begin{landscape}
+\sectionbar{4. Operations and boundaries in execution order}
+
+\textbf{Average modeled power} is total row energy divided by row latency.
+Activity energy is operation dynamic energy on operation rows and link energy
+on boundary rows.  Boundary rows are shaded blue.
+
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabularx}{\linewidth}{@{}r l Y l r r r r r@{}}
+\toprule
+\textbf{No.} & \textbf{Kind} & \textbf{Operation or boundary} &
+\textbf{Runs on} & \textbf{Latency (ns)} & \textbf{Base E (nJ)} &
+\textbf{Activity E (nJ)} & \textbf{Total E (nJ)} & \textbf{Avg. P (W)} \\
+\midrule
+1 & Operation & \texttt{gemm\_expand} & SA & 3474.94 & 22500.27 & 16245.04 & 38745.31 & 11.15 \\
+\rowcolor{paleblue}
+2 & Boundary & \texttt{gemm\_expand} $\rightarrow$ \texttt{expand\_relu} & SA $\rightarrow$ FPGA & 949.38 & 6147.22 & 262.14 & 6409.36 & 6.75 \\
+3 & Operation & \texttt{expand\_relu} & FPGA & 2560.00 & 16576.00 & 13.11 & 16589.11 & 6.48 \\
+\rowcolor{paleblue}
+4 & Boundary & \texttt{expand\_relu} $\rightarrow$ \texttt{gemm\_contract1} & FPGA $\rightarrow$ SA & 949.38 & 6147.22 & 262.14 & 6409.36 & 6.75 \\
+5 & Operation & \texttt{gemm\_contract1} & SA & 5961.89 & 38603.23 & 52397.25 & 91000.48 & 15.26 \\
+\rowcolor{paleblue}
+6 & Boundary & \texttt{gemm\_contract1} $\rightarrow$ \texttt{contract1\_relu} & SA $\rightarrow$ FPGA & 475.94 & 3081.70 & 131.07 & 3212.78 & 6.75 \\
+7 & Operation & \texttt{contract1\_relu} & FPGA & 1280.00 & 8288.00 & 6.55 & 8294.55 & 6.48 \\
+\rowcolor{paleblue}
+8 & Boundary & \texttt{contract1\_relu} $\rightarrow$ \texttt{gemm\_contract2} & FPGA $\rightarrow$ SA & 475.94 & 3081.70 & 131.07 & 3212.78 & 6.75 \\
+9 & Operation & \texttt{gemm\_contract2} & SA & 1743.47 & 11288.98 & 13099.31 & 24388.30 & 13.99 \\
+\rowcolor{paleblue}
+10 & Boundary & \texttt{gemm\_contract2} $\rightarrow$ \texttt{contract2\_relu} & SA $\rightarrow$ FPGA & 239.22 & 1548.95 & 65.54 & 1614.48 & 6.75 \\
+11 & Operation & \texttt{contract2\_relu} & FPGA & 640.00 & 4144.00 & 3.28 & 4147.28 & 6.48 \\
+\rowcolor{paleblue}
+12 & Boundary & \texttt{contract2\_relu} $\rightarrow$ \texttt{gemm\_head} & FPGA $\rightarrow$ SA & 239.22 & 1548.95 & 65.54 & 1614.48 & 6.75 \\
+13 & Operation & \texttt{gemm\_head} & SA & 549.03 & 3554.94 & 1834.02 & 5388.97 & 9.82 \\
+\midrule
+& Subtotal & All operations & --- & 16209.33 & 104955.43 & 83598.56 & 188553.99 & 11.63 \\
+\rowcolor{paleblue}
+& Subtotal & All boundaries & --- & 3329.07 & 21555.74 & 917.50 & 22473.24 & 6.75 \\
+\rowcolor{palegreen}
+& \textbf{Total} & \textbf{Complete network} & --- & \textbf{19538.40} & \textbf{126511.16} & \textbf{84516.06} & \textbf{211027.23} & \textbf{10.80} \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\vspace{0.5em}
+The fixed baseline-power component is included in every operation and boundary
+row.  Therefore the ordered row totals add directly to the complete-network
+energy without double counting.
+\end{landscape}
+
+\clearpage
+\sectionbar{5. Final reconciliation}
+\begin{resultbox}{Verified totals}
+\begin{align*}
+L_{\mathrm{network}}&=16209.33+3329.07=19538.40\ns=19.54\us,\\
+E_{\mathrm{network}}&:\ 126511.16+83598.56+917.50
+\ \Longrightarrow\ 211027.23\nj=211.03\uj,\\
+J&=L[\mathrm{ns}]+E[\mathrm{pJ}]=211046764.62.
+\end{align*}
+\end{resultbox}
+
+\begin{tabularx}{\linewidth}{@{}Y r r c@{}}
+\toprule
+\textbf{Quantity} & \textbf{Saved} & \textbf{Recomputed} & \textbf{Check} \\
+\midrule
+Latency (ns) & 19538.40 & 19538.40 & pass \\
+Baseline energy (nJ) & 126511.16 & 126511.16 & pass \\
+Dynamic energy (nJ) & 83598.56 & 83598.56 & pass \\
+Movement energy (nJ) & 917.50 & 917.50 & pass \\
+Total energy (nJ) & 211027.23 & 211027.23 & pass \\
+Objective & 211046764.62 & 211046764.62 & pass \\
+\bottomrule
+\end{tabularx}
+
+\sectionbar{6. What is and is not modeled}
+\begin{itemize}
+\item \textbf{Real GEMM path:} SCALE-Sim supplies the four GEMM cycle counts.
+\item \textbf{Real analytical ReLU path:} \texttt{legacy\_fpga\_relu\_v1}; the
+placeholder ReLU model is not selected.
+\item \textbf{No Softmax:} a Softmax placeholder exists in the profile but is
+never called because this graph has no Softmax layer.
+\item \textbf{One byte per element:} every tensor is \texttt{int8}.
+\item \textbf{Sequential accounting:} incoming movement is assigned to the
+consumer and added to its layer time.
+\item \textbf{Search limit:} this is the best observed one-SA/one-FPGA result,
+not proof of a global optimum over unsupported multi-SA movement.
+\end{itemize}
+
+\sectionbar{7. Reproducibility tags}
+\begin{tabularx}{\linewidth}{@{}L Y@{}}
+\toprule
+Commit / seed & \texttt{0703beb} / \texttt{26002} \\
+Best proposal & 48 of 50 \\
+Architecture fingerprint & \texttt{eaf8929507c0} \\
+Profile fingerprint & \texttt{5d95a0ac50f1} \\
+GEMM evaluator & \texttt{legacy\_scale\_sim\_gemm\_v1} \\
+ReLU evaluator & \texttt{legacy\_fpga\_relu\_v1} \\
+\bottomrule
+\end{tabularx}
+\end{document}

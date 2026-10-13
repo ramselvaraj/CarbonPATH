@@ -3,21 +3,33 @@ import json
 import random
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from system.utils.AtlasAnnealingMoves import (
     MOVE_TYPES,
-    candidate_profile_paths,
     mutate_atlas_design_point,
     sequential_gemm_search_space,
     validate_atlas_architecture,
 )
+from system.utils.AtlasGraphAdapter import load_atlas_graph
 from system.utils.EvaluationProfile import load_evaluation_profile
+from system.utils.WorkloadMapping import initial_workload_mapping
 from system.utils.ChipletSystem import ChipletSystem
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 SEARCH_SPACE = Path("cfg/experiments/atlas_modular_search_space_placeholders.json")
+GRAPH = Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json")
+PROFILE = Path("cfg/profiles/atlas_multi_sa_fpga_v1.json")
+# These parameters have one option for the reference design point.
+ONE_OPTION_MOVES = (
+    "gemm_merge_tiles",
+    "gemm_sa_set",
+    "handoff_movement",
+    "fpga_count",
+    "transfer_model",
+)
 
 
 def _load(path):
@@ -44,17 +56,33 @@ class _MoveRng:
         return [self.choice(values) for _ in range(k)]
 
 
+class _GemmGraph:
+    """A chain of GEMM operations for an architecture without an FPGA."""
+
+    def __init__(self, count):
+        self.operations = tuple(
+            SimpleNamespace(operation_id=f"gemm_{index}", operation_type="gemm")
+            for index in range(count)
+        )
+
+
 class AtlasAnnealingMoveTests(unittest.TestCase):
     def setUp(self):
         self.architecture = _load(ARCHITECTURE)
         self.search_space = _load(SEARCH_SPACE)
-        self.profiles = [
-            load_evaluation_profile(path)
-            for path in candidate_profile_paths(self.search_space)
-        ]
+        self.graph = load_atlas_graph(GRAPH)
+        self.profile = load_evaluation_profile(PROFILE)
 
-    def test_search_space_names_profiles(self):
-        self.assertGreaterEqual(len(self.profiles), 2)
+    def _mapping(self, architecture, graph=None):
+        has_fpga = any(
+            isinstance(chiplet, dict) and chiplet.get("chiplet_type") == "fpga"
+            for chiplet in architecture.values()
+        )
+        if not has_fpga and graph is None:
+            graph = _GemmGraph(2)
+        return initial_workload_mapping(
+            graph or self.graph, architecture, self.profile, self.search_space
+        )
 
     def test_explicit_move_weights_select_the_only_enabled_family(self):
         params = copy.deepcopy(self.search_space)
@@ -64,17 +92,16 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         }
 
         for seed in range(20):
-            moved, profile, move = mutate_atlas_design_point(
+            moved, mapping, move = mutate_atlas_design_point(
                 self.architecture,
-                self.profiles[0],
+                self._mapping(self.architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=random.Random(seed),
             )
 
             self.assertEqual(move, "sa_array")
             self.assertNotEqual(moved, self.architecture)
-            self.assertEqual(profile, self.profiles[0])
+            self.assertEqual(mapping, self._mapping(self.architecture))
 
     def test_unknown_move_weight_is_rejected(self):
         params = copy.deepcopy(self.search_space)
@@ -83,9 +110,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedEvaluation, "unknown move"):
             mutate_atlas_design_point(
                 self.architecture,
-                self.profiles[0],
+                self._mapping(self.architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=random.Random(1),
             )
 
@@ -105,9 +131,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedEvaluation, "enabled move"):
             mutate_atlas_design_point(
                 architecture,
-                self.profiles[0],
+                self._mapping(architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=random.Random(1),
             )
 
@@ -127,48 +152,87 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedEvaluation, "finite non-negative"):
             mutate_atlas_design_point(
                 architecture,
-                self.profiles[0],
+                self._mapping(architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=random.Random(1),
             )
 
-    def test_every_declared_move_family_is_reachable_from_reference_design(self):
+    def test_every_move_with_an_alternative_is_reachable_from_reference_design(self):
+        start = self._mapping(self.architecture)
         for move_name in MOVE_TYPES:
+            if move_name in ONE_OPTION_MOVES:
+                continue
             with self.subTest(move_name=move_name):
                 params = copy.deepcopy(self.search_space)
                 params["move_weights"] = {
                     candidate: 1.0 if candidate == move_name else 0.0
                     for candidate in MOVE_TYPES
                 }
-                moved, profile, selected = mutate_atlas_design_point(
+                moved, mapping, selected = mutate_atlas_design_point(
                     self.architecture,
-                    self.profiles[0],
+                    start,
                     params,
-                    candidate_profiles=self.profiles,
                     rng=_MoveRng(move_name),
                 )
 
                 self.assertEqual(selected, move_name)
-                architecture_changed = moved != self.architecture
-                profile_changed = (
-                    profile.fingerprint() != self.profiles[0].fingerprint()
-                    or profile.name != self.profiles[0].name
-                )
-                self.assertTrue(architecture_changed or profile_changed)
+                self.assertTrue(moved != self.architecture or mapping != start)
+
+    def test_a_parameter_with_one_option_is_never_selected(self):
+        start = self._mapping(self.architecture)
+        for move_name in ONE_OPTION_MOVES:
+            with self.subTest(move_name=move_name):
+                params = copy.deepcopy(self.search_space)
+                params["move_weights"] = {move_name: 1.0, "sa_array": 1.0}
+                for seed in range(20):
+                    _, _, selected = mutate_atlas_design_point(
+                        self.architecture, start, params, rng=random.Random(seed)
+                    )
+                    self.assertEqual(selected, "sa_array")
+
+                params["move_weights"] = {move_name: 1.0}
+                with self.assertRaisesRegex(UnsupportedEvaluation, "enabled move"):
+                    mutate_atlas_design_point(
+                        self.architecture, start, params, rng=random.Random(1)
+                    )
+
+    def test_one_option_move_is_an_invalid_proposal_when_skipping_is_off(self):
+        params = copy.deepcopy(self.search_space)
+        params["move_weights"] = {"transfer_model": 1.0}
+        params["skip_moves_without_alternative"] = False
+
+        with self.assertRaisesRegex(UnsupportedEvaluation, "no alternative"):
+            mutate_atlas_design_point(
+                self.architecture,
+                self._mapping(self.architecture),
+                params,
+                rng=random.Random(1),
+            )
+
+    def test_a_second_fpga_count_option_is_reported_as_unsupported(self):
+        params = copy.deepcopy(self.search_space)
+        params["fpga"]["count"] = [1, 2]
+        params["move_weights"] = {"fpga_count": 1.0}
+
+        with self.assertRaisesRegex(UnsupportedEvaluation, "one option now"):
+            mutate_atlas_design_point(
+                self.architecture,
+                self._mapping(self.architecture),
+                params,
+                rng=random.Random(1),
+            )
 
     def test_many_moves_preserve_supported_sa_count_and_single_fpga(self):
         rng = random.Random(2024)
         architecture = self.architecture
-        profile = self.profiles[0]
+        mapping = self._mapping(architecture)
         valid_moves = 0
         for _ in range(400):
             try:
-                architecture, profile, move = mutate_atlas_design_point(
+                architecture, mapping, move = mutate_atlas_design_point(
                     architecture,
-                    profile,
+                    mapping,
                     self.search_space,
-                    self.profiles,
                     rng=rng,
                 )
             except UnsupportedEvaluation:
@@ -185,7 +249,9 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
             self.assertTrue(
                 all("chiplet_type" not in architecture[key] for key in endpoints.sa_keys)
             )
-            self.assertIn(profile.name, {p.name for p in self.profiles})
+            for operation in mapping.operations:
+                valid_ids = endpoints.sa_ids if operation.is_gemm else endpoints.fpga_ids
+                self.assertTrue(set(operation.endpoint_ids) <= set(valid_ids))
         self.assertGreaterEqual(valid_moves, 300)
 
     def test_mutation_does_not_mutate_input_architecture(self):
@@ -193,9 +259,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         rng = random.Random(7)
         mutate_atlas_design_point(
             self.architecture,
-            self.profiles[0],
+            self._mapping(self.architecture),
             self.search_space,
-            self.profiles,
             rng=rng,
         )
         self.assertEqual(json.dumps(self.architecture, sort_keys=True), original)
@@ -286,36 +351,158 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedEvaluation, "at most six"):
             validate_atlas_architecture(architecture)
 
-    def test_profile_move_is_available_only_with_candidates(self):
-        rng = random.Random(1)
-        architecture, profile, _ = mutate_atlas_design_point(
-            self.architecture,
-            self.profiles[0],
-            self.search_space,
-            candidate_profiles=(),
-            rng=rng,
-        )
-        self.assertEqual(profile.name, self.profiles[0].name)
-
-    def test_mapping_moves_update_the_gemm_evaluator_settings(self):
-        expected_settings = {
-            "gemm_dataflow": "dataflow",
-            "gemm_split_k": "split_k",
-            "gemm_assignment_order": "assignment_order",
-        }
-        for move_name, setting in expected_settings.items():
+    def test_gemm_setting_moves_change_one_gemm_of_the_mapping(self):
+        start = self._mapping(self.architecture)
+        for move_name, field in (
+            ("gemm_dataflow", "dataflow"),
+            ("gemm_split_k", "split_k"),
+            ("gemm_assignment_order", "tile_order"),
+        ):
             with self.subTest(move_name=move_name):
-                architecture, profile, actual_move = mutate_atlas_design_point(
+                architecture, mapping, actual_move = mutate_atlas_design_point(
                     self.architecture,
-                    self.profiles[0],
+                    start,
                     self.search_space,
-                    candidate_profiles=self.profiles,
                     rng=_MoveRng(move_name),
                 )
 
                 self.assertEqual(actual_move, move_name)
-                self.assertIn(setting, profile.evaluator_settings_for("gemm"))
                 self.assertEqual(architecture, self.architecture)
+                changed = [
+                    index
+                    for index in start.gemm_indexes
+                    if getattr(mapping.operations[index], field)
+                    != getattr(start.operations[index], field)
+                ]
+                self.assertEqual(len(changed), 1)
+                self.assertGreater(len(start.gemm_indexes), 1)
+
+    def test_shared_scope_changes_every_gemm_together(self):
+        params = sequential_gemm_search_space(
+            {**self.search_space, "max_chiplet": 6}
+        )
+        start = self._mapping(self.architecture)
+
+        _, mapping, move = mutate_atlas_design_point(
+            self.architecture, start, params, rng=_MoveRng("gemm_dataflow")
+        )
+
+        self.assertEqual(move, "gemm_dataflow")
+        dataflows = {mapping.operations[index].dataflow for index in mapping.gemm_indexes}
+        self.assertEqual(len(dataflows), 1)
+        self.assertNotEqual(dataflows, {start.operations[0].dataflow})
+
+    def test_a_listed_gemm_option_limits_the_move(self):
+        params = copy.deepcopy(self.search_space)
+        params["gemm_mapping"] = {"dataflow": ["ws", "os"]}
+        mapping = self._mapping(self.architecture)
+
+        for seed in range(30):
+            _, mapping, _ = mutate_atlas_design_point(
+                self.architecture,
+                mapping,
+                {**params, "move_weights": {"gemm_dataflow": 1.0}},
+                rng=random.Random(seed),
+            )
+            for index in mapping.gemm_indexes:
+                self.assertIn(mapping.operations[index].dataflow, ("ws", "os"))
+
+    def test_sa_set_move_changes_the_sa_set_of_one_gemm(self):
+        architecture = self._two_sa_architecture()
+        mapping = self._mapping(architecture)
+        params = {**self.search_space, "move_weights": {"gemm_sa_set": 1.0}}
+        seen = set()
+
+        for seed in range(40):
+            before = mapping
+            moved, mapping, move = mutate_atlas_design_point(
+                architecture, mapping, params, rng=random.Random(seed)
+            )
+            self.assertEqual(move, "gemm_sa_set")
+            self.assertEqual(moved, architecture)
+            changed = [
+                index
+                for index in mapping.gemm_indexes
+                if mapping.operations[index].endpoint_ids
+                != before.operations[index].endpoint_ids
+            ]
+            self.assertEqual(len(changed), 1)
+            for index in mapping.gemm_indexes:
+                sa_ids = mapping.operations[index].endpoint_ids
+                self.assertTrue(sa_ids)
+                self.assertTrue(set(sa_ids) <= {0, 2})
+                seen.add(sa_ids)
+        self.assertEqual(seen, {(0,), (2,), (0, 2)})
+
+    def test_handoff_move_selects_a_listed_policy_for_one_handoff(self):
+        architecture = self._sa_only_architecture()
+        graph = _GemmGraph(3)
+        mapping = self._mapping(architecture, graph)
+        options = self.search_space["movement_policy"]["sa_to_sa"]
+        self.assertEqual(mapping.handoffs, (options[0], options[0]))
+        params = {**self.search_space, "move_weights": {"handoff_movement": 1.0}}
+
+        moved, moved_mapping, move = mutate_atlas_design_point(
+            architecture, mapping, params, rng=random.Random(3)
+        )
+
+        self.assertEqual(move, "handoff_movement")
+        self.assertEqual(moved, architecture)
+        changed = [
+            index
+            for index, policy in enumerate(moved_mapping.handoffs)
+            if policy != mapping.handoffs[index]
+        ]
+        self.assertEqual(len(changed), 1)
+        self.assertIn(moved_mapping.handoffs[changed[0]], options)
+
+    def test_sa_count_move_keeps_the_mapping_on_existing_endpoints(self):
+        architecture = self._two_sa_architecture()
+        mapping = self._mapping(architecture)
+        first_gemm = mapping.gemm_indexes[0]
+        mapping = mapping.with_operation(first_gemm, endpoint_ids=(0,))
+        params = {**self.search_space, "move_weights": {"sa_count": 1.0}}
+
+        moved, moved_mapping, _ = mutate_atlas_design_point(
+            architecture, mapping, params, rng=_MoveRng("sa_count", preferred="add")
+        )
+
+        endpoints = validate_atlas_architecture(moved)
+        self.assertEqual(len(endpoints.sa_keys), 3)
+        for operation in moved_mapping.operations:
+            valid_ids = endpoints.sa_ids if operation.is_gemm else endpoints.fpga_ids
+            self.assertTrue(set(operation.endpoint_ids) <= set(valid_ids))
+        # The new SA joins every GEMM; the first GEMM keeps its smaller set.
+        self.assertEqual(len(moved_mapping.operations[first_gemm].endpoint_ids), 2)
+        self.assertEqual(
+            len(moved_mapping.operations[mapping.gemm_indexes[1]].endpoint_ids), 3
+        )
+
+    def _two_sa_architecture(self):
+        architecture = _load(ARCHITECTURE)
+        architecture["Chiplet_3"] = dict(architecture["Chiplet_1"])
+        architecture["pkg"]["mem_pkg_conn"]["Chiplet_3"] = 4
+        architecture["pkg"]["inter_pkg_conn"].append(
+            {
+                "from": "Chiplet_2",
+                "to": "Chiplet_3",
+                "connection_type": "2.5d_emib",
+                "loc": "2.5d_chiplet",
+            }
+        )
+        return architecture
+
+    def _sa_only_architecture(self):
+        architecture = copy.deepcopy(self.architecture)
+        del architecture["Chiplet_2"]
+        architecture["pkg"] = {
+            "HI_pkg_type": "2d",
+            "inter_pkg_conn": "2d_na",
+            "protocol_3d": "na",
+            "protocol_2.5d": "na",
+            "mem_pkg_conn": {"mem_type": "ddr5", "Chiplet_1": 8},
+        }
+        return architecture
 
     def test_sa_value_move_supports_a_multi_sa_architecture(self):
         architecture = _load(ARCHITECTURE)
@@ -332,9 +519,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             self.search_space,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("sa_array"),
         )
 
@@ -350,11 +536,10 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         params["pkg"]["inter_pkg_architecture"] = ["2.5d_emib"]
         original_fpga = copy.deepcopy(self.architecture["Chiplet_2"])
 
-        moved, profile, move = mutate_atlas_design_point(
+        moved, mapping, move = mutate_atlas_design_point(
             self.architecture,
-            self.profiles[0],
+            self._mapping(self.architecture),
             params,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("sa_count"),
         )
 
@@ -363,7 +548,11 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         self.assertEqual(len(endpoints.sa_keys), 2)
         self.assertEqual(len(endpoints.fpga_keys), 1)
         self.assertEqual(moved[endpoints.fpga_keys[0]], original_fpga)
-        self.assertEqual(profile, self.profiles[0])
+        for operation in mapping.operations:
+            self.assertEqual(
+                operation.endpoint_ids,
+                endpoints.sa_ids if operation.is_gemm else endpoints.fpga_ids,
+            )
         self.assertEqual(
             set(moved["pkg"]["mem_pkg_conn"]) - {"mem_type"},
             set(endpoints.sa_keys) | set(endpoints.fpga_keys),
@@ -389,9 +578,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("sa_count"),
         )
 
@@ -407,9 +595,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             self.architecture,
-            self.profiles[0],
+            self._mapping(self.architecture),
             params,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("interconnect"),
         )
 
@@ -435,9 +622,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("interconnect"),
         )
 
@@ -487,9 +673,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("interconnect", preferred="2.5d_3d"),
         )
 
@@ -515,16 +700,14 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         for _ in range(20):
             architecture, _, _ = mutate_atlas_design_point(
                 architecture,
-                self.profiles[0],
+                self._mapping(architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=_MoveRng("sa_count", preferred="add"),
             )
             architecture, _, _ = mutate_atlas_design_point(
                 architecture,
-                self.profiles[0],
+                self._mapping(architecture),
                 params,
-                candidate_profiles=self.profiles,
                 rng=_MoveRng("sa_count", preferred="delete"),
             )
 
@@ -538,9 +721,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
     def test_protocol_move_only_selects_a_link_compatible_protocol(self):
         moved, _, move = mutate_atlas_design_point(
             self.architecture,
-            self.profiles[0],
+            self._mapping(self.architecture),
             self.search_space,
-            candidate_profiles=self.profiles,
             rng=_MoveRng("protocol"),
         )
 
@@ -563,9 +745,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("mem_type", preferred="hbm3"),
         )
 
@@ -585,9 +766,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("mem_type", preferred="hbm3"),
         )
 
@@ -612,9 +792,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, _ = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("mem_type", preferred="hbm3"),
         )
 
@@ -636,9 +815,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, _ = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("mem_type", preferred="ddr5"),
         )
 
@@ -656,9 +834,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("interconnect", preferred="3d_tsv"),
         )
 
@@ -681,9 +858,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, _ = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("interconnect", preferred="aib"),
         )
 
@@ -701,9 +877,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
 
         moved, _, move = mutate_atlas_design_point(
             architecture,
-            self.profiles[0],
+            self._mapping(architecture),
             params,
-            candidate_profiles=(self.profiles[0],),
             rng=_MoveRng("sa_count", preferred="delete"),
         )
 

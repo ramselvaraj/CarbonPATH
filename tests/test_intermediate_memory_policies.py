@@ -94,21 +94,6 @@ class IntermediateMemoryPolicyTests(unittest.TestCase):
             INTERMEDIATE_BYTES * 2 * 8 * 5,
         )
 
-    def test_ideal_on_chip_removes_internal_transfer_cost(self):
-        plan = plan_boundary(
-            boundary_index=1,
-            intermediate_bytes=INTERMEDIATE_BYTES,
-            transfers=[TransferSlice(INTERMEDIATE_BYTES, 0, 1)],
-            cores={0: core(0, capacity=1), 1: core(1, capacity=1)},
-            policy="ideal_on_chip",
-        )
-
-        self.assertEqual(plan.selected_method, "ideal_on_chip")
-        self.assertEqual(plan.retained_bytes, INTERMEDIATE_BYTES)
-        self.assertEqual(plan.dram_traffic_bytes, 0)
-        self.assertEqual(plan.latency_ns, 0)
-        self.assertEqual(plan.energy_pj, 0)
-
     def test_local_sram_retains_same_core_intermediate_when_it_fits(self):
         plan = plan_boundary(
             boundary_index=1,

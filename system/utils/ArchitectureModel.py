@@ -1,7 +1,7 @@
 """Canonical endpoint and package validation for modular CarbonPATH.
 
 This module describes which compute endpoints an architecture contains.  It is
-shared by construction, placement, and mutation; it has no annealing behavior.
+shared by construction, assignment, and mutation; it has no annealing behavior.
 """
 
 from __future__ import annotations

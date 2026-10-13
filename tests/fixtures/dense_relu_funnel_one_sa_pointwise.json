@@ -1,0 +1,88 @@
+{
+  "fixture_version": 1,
+  "source": "modular CarbonPATH activation_boundary_v1 single-SA reference",
+  "architecture_fingerprint": "d29e5669aa5e",
+  "atlas_graph_fingerprint": "810bd39b27e0",
+  "profile": "legacy_sa_fpga_v1",
+  "summary": {
+    "latency_ns": 133648.7947773606,
+    "baseline_energy_pj": 416817178.7118933,
+    "compute_energy_pj": 105521570.86836326,
+    "movement_energy_pj": 1835008.0,
+    "total_energy_pj": 524173757.5802566
+  },
+  "handoffs": [
+    {
+      "boundary_index": 2,
+      "operation_id": "expand_relu",
+      "operation_type": "relu",
+      "method": "route",
+      "source_endpoint": 0,
+      "destination_endpoint": 1,
+      "logical_bytes": 131072,
+      "physical_bytes": 131072,
+      "charged_latency_ns": 2148.8937459125473,
+      "charged_energy_pj": 524288.0
+    },
+    {
+      "boundary_index": 3,
+      "operation_id": "gemm_contract1",
+      "operation_type": "gemm",
+      "method": "route",
+      "source_endpoint": 1,
+      "destination_endpoint": 0,
+      "logical_bytes": 131072,
+      "physical_bytes": 131072,
+      "charged_latency_ns": 2148.8937459125473,
+      "charged_energy_pj": 524288.0
+    },
+    {
+      "boundary_index": 4,
+      "operation_id": "contract1_relu",
+      "operation_type": "relu",
+      "method": "route",
+      "source_endpoint": 0,
+      "destination_endpoint": 1,
+      "logical_bytes": 65536,
+      "physical_bytes": 65536,
+      "charged_latency_ns": 1077.4468729562736,
+      "charged_energy_pj": 262144.0
+    },
+    {
+      "boundary_index": 5,
+      "operation_id": "gemm_contract2",
+      "operation_type": "gemm",
+      "method": "route",
+      "source_endpoint": 1,
+      "destination_endpoint": 0,
+      "logical_bytes": 65536,
+      "physical_bytes": 65536,
+      "charged_latency_ns": 1077.4468729562736,
+      "charged_energy_pj": 262144.0
+    },
+    {
+      "boundary_index": 6,
+      "operation_id": "contract2_relu",
+      "operation_type": "relu",
+      "method": "route",
+      "source_endpoint": 0,
+      "destination_endpoint": 1,
+      "logical_bytes": 32768,
+      "physical_bytes": 32768,
+      "charged_latency_ns": 541.7234364781368,
+      "charged_energy_pj": 131072.0
+    },
+    {
+      "boundary_index": 7,
+      "operation_id": "gemm_head",
+      "operation_type": "gemm",
+      "method": "route",
+      "source_endpoint": 1,
+      "destination_endpoint": 0,
+      "logical_bytes": 32768,
+      "physical_bytes": 32768,
+      "charged_latency_ns": 541.7234364781368,
+      "charged_energy_pj": 131072.0
+    }
+  ]
+}

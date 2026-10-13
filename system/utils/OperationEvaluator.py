@@ -2,7 +2,7 @@
 
 An operation evaluator estimates one ATLAS operation at an assigned endpoint.
 Every evaluator returns only its compute latency and dynamic energy. The
-executor owns operation identity, placement, tensor residency, tensor movement,
+executor owns operation identity, assignment, tensor residency, tensor movement,
 totals, and reporting.
 
 An evaluator never reads the raw ATLAS artifact. It receives a typed input view
@@ -66,12 +66,12 @@ class OperationEvaluator:
     operation_type = ""
     input_adapter_id = ""
 
-    def prepare(self, evaluator_input, placement, context):
+    def prepare(self, evaluator_input, assignment, context):
         """Optionally build a reusable mapping/simulation artifact."""
         return None
 
     def evaluate(
-        self, evaluator_input, placement, context
+        self, evaluator_input, assignment, context
     ):  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -95,13 +95,13 @@ class EvaluatorBinding:
     def operation_type(self):
         return self.evaluator.operation_type
 
-    def estimate(self, operation, access_plan, placement, context):
+    def estimate(self, operation, access_plan, assignment, context):
         evaluator_input = self.input_adapter.build_input(operation, access_plan)
-        return self.evaluator.evaluate(evaluator_input, placement, context)
+        return self.evaluator.evaluate(evaluator_input, assignment, context)
 
-    def prepare(self, operation, access_plan, placement, context):
+    def prepare(self, operation, access_plan, assignment, context):
         evaluator_input = self.input_adapter.build_input(operation, access_plan)
-        return self.evaluator.prepare(evaluator_input, placement, context)
+        return self.evaluator.prepare(evaluator_input, assignment, context)
 
 
 class EvaluatorRegistry:

@@ -8,7 +8,7 @@ configuration; the estimator never derives resources from synthesis.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,29 @@ class FpgaReluImplementation:
         )
 
 
+@dataclass(frozen=True)
+class FpgaSoftmaxImplementation:
+    """Softmax implementation parameters; the default matches the placeholder."""
+
+    energy_per_element_pj: float = 2.0
+
+    @classmethod
+    def from_dict(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("softmax_implementation must be an object")
+        unknown = sorted(set(value) - {"energy_per_element_pj"})
+        if unknown:
+            raise ValueError(
+                f"Unsupported softmax_implementation field(s): {', '.join(unknown)}"
+            )
+        energy = value.get("energy_per_element_pj", cls.energy_per_element_pj)
+        if isinstance(energy, bool) or not isinstance(energy, (int, float)) or energy < 0:
+            raise ValueError(
+                "softmax_implementation.energy_per_element_pj must be >= 0"
+            )
+        return cls(energy_per_element_pj=float(energy))
+
+
 @dataclass
 class FpgaChiplet:
     id: int
@@ -83,6 +106,11 @@ class FpgaChiplet:
     node: int
     relu_implementation: FpgaReluImplementation
     location: str = "chiplet"
+    luts: int | None = None
+    ffs: int | None = None
+    softmax_implementation: FpgaSoftmaxImplementation = field(
+        default_factory=FpgaSoftmaxImplementation
+    )
 
     @property
     def chiplet_type(self):
@@ -101,7 +129,10 @@ class FpgaChiplet:
             "clbs",
             "brams",
             "dsps",
+            "luts",
+            "ffs",
             "relu_implementation",
+            "softmax_implementation",
         }
         unknown = sorted(set(value) - allowed)
         if unknown:
@@ -125,6 +156,15 @@ class FpgaChiplet:
                 raise ValueError(f"{name}.{field} must be a non-negative integer")
             counts[field] = count
 
+        optional_counts = {}
+        for field in ("luts", "ffs"):
+            count = value.get(field)
+            if count is not None and (not isinstance(count, int) or count < 0):
+                raise ValueError(
+                    f"{name}.{field} must be a non-negative integer when present"
+                )
+            optional_counts[field] = count
+
         implementation = FpgaReluImplementation.from_dict(
             value.get("relu_implementation", {})
         )
@@ -141,4 +181,9 @@ class FpgaChiplet:
             power=float(power),
             node=int(tech_node),
             relu_implementation=implementation,
+            luts=optional_counts["luts"],
+            ffs=optional_counts["ffs"],
+            softmax_implementation=FpgaSoftmaxImplementation.from_dict(
+                value.get("softmax_implementation", {})
+            ),
         )

@@ -42,12 +42,6 @@
       "sram_energy_pj": 2430.074208256,
       "boundary_methods": ["cold_dram"]
     },
-    "ideal_on_chip": {
-      "latency_ns": 404.0,
-      "communication_energy_pj": 51200.0,
-      "sram_energy_pj": 2430.074208256,
-      "boundary_methods": ["ideal_on_chip"]
-    },
     "local_sram": {
       "latency_ns": 404.0,
       "communication_energy_pj": 51200.0,

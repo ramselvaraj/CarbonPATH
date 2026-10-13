@@ -6,7 +6,6 @@ import math
 
 INTERMEDIATE_POLICIES = (
     "cold_dram",
-    "ideal_on_chip",
     "local_sram",
     "direct_forward",
 )
@@ -249,22 +248,6 @@ def plan_boundary(
     )
     if policy == "cold_dram":
         return cold
-    if policy == "ideal_on_chip":
-        return BoundaryPlan(
-            boundary_index=boundary_index,
-            requested_policy=policy,
-            selected_method="ideal_on_chip",
-            intermediate_bytes=intermediate_bytes,
-            retained_bytes=intermediate_bytes,
-            forwarded_bytes=0,
-            dram_spilled_bytes=0,
-            dram_traffic_bytes=0,
-            latency_ns=0,
-            energy_pj=0,
-            producer_cores=tuple(sorted({t.producer_core for t in transfers})),
-            consumer_cores=tuple(sorted({t.consumer_core for t in transfers})),
-            routes=(),
-        )
 
     if not mapping_valid:
         return BoundaryPlan(

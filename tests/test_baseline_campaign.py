@@ -196,7 +196,7 @@ class BaselineCampaignTests(unittest.TestCase):
                 "profile": "atlas_modular_v1",
                 "version": 1,
                 "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
-                "placement_policy": "all_sas_v1",
+                "assignment_policy": "all_sas_v1",
                 "movement_policy": "direct_forward_v1",
                 "transfer_model": "route_transfer_v1",
             }

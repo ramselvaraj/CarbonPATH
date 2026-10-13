@@ -5,6 +5,7 @@ from pathlib import Path
 
 from system.utils.ChipletSystem import ChipletSystem
 from system.utils.GEMMWorkload import GEMMWorkload
+from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from main import build_scheduler_system, collect_tile_mappings
 
 
@@ -107,6 +108,13 @@ class ChipletSystemTests(unittest.TestCase):
         self.assertGreater(reciprocal_bandwidth, 0)
         self.assertGreater(energy, 0)
 
+    def test_link_cost_reports_a_directed_edge_and_rejects_a_missing_one(self):
+        system = ChipletSystem(arch_dict=_multi_sa_architecture(2))
+
+        self.assertEqual(system.link_cost(0, 1), system.link_cost(1, 0))
+        with self.assertRaises(UnsupportedEvaluation):
+            system.link_cost(0, 2)
+
     def test_supports_sa_only_multi_chiplet_system(self):
         system = ChipletSystem(
             arch_dict=_multi_sa_architecture(4, include_fpga=False)
@@ -174,6 +182,21 @@ class ChipletSystemTests(unittest.TestCase):
         self.assertGreater(details["reduction_latency_ns"], 0)
         self.assertGreater(details["reduction_transfer_latency_ns"], 0)
         self.assertGreater(details["reduction_communication_energy_pj"], 0)
+
+    def test_single_sa_split_k_reports_no_interconnect_latency(self):
+        architecture = _multi_sa_architecture(1, include_fpga=False)
+        architecture["WL_mapping"]["mapping"]["if_splitting_k"] = 1
+        scheduler, system = build_scheduler_system(
+            GEMMWorkload(512, 512, 512), architecture
+        )
+
+        latency, energy = scheduler.system_modeling(system)
+
+        self.assertGreaterEqual(latency, 0)
+        self.assertGreaterEqual(energy, 0)
+        self.assertEqual(
+            scheduler.last_modeling_details["reduction_transfer_latency_ns"], 0
+        )
 
     def test_non_split_mapping_reports_no_reduction_cost(self):
         architecture = _multi_sa_architecture(3, include_fpga=False)

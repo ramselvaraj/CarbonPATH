@@ -9,7 +9,9 @@ import pandas as pd
 import main
 from system.utils.AtlasGraphAdapter import load_atlas_graph
 from system.utils.AtlasObjective import build_atlas_objective
+from system.utils.DesignPointFile import parse_design_point
 from system.utils.EvaluationProfile import load_evaluation_profile
+from system.utils.GEMMWorkload import GEMMWorkload
 from system.utils.SimulationCache import SimulationCache
 
 
@@ -17,11 +19,8 @@ ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 GRAPH = Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json")
 PROFILE_DIR = Path("cfg/profiles/placeholders")
 REFERENCE_PROFILE = Path("cfg/profiles/atlas_modular_v1.json")
-BAD_PROFILE_PATHS = (
-    PROFILE_DIR / "ph_slow_gemm_v1.json",
-    PROFILE_DIR / "ph_dram_always_v1.json",
-    PROFILE_DIR / "ph_pessimistic_transfer_v1.json",
-)
+MULTI_SA_PROFILE = Path("cfg/profiles/atlas_multi_sa_fpga_v1.json")
+FULL_SEARCH_SPACE = Path("cfg/experiments/atlas_modular_search_space.json")
 
 CACHE_COLUMNS = [
     "core_size",
@@ -46,8 +45,31 @@ def _load(path):
         return json.load(file)
 
 
+def _sa_count(architecture):
+    return sum(
+        1
+        for key, chiplet in architecture.items()
+        if key.startswith("Chiplet_")
+        and str(chiplet.get("chiplet_type", "systolic_array")).lower() != "fpga"
+    )
+
+
+def _sa_only_search_space():
+    with FULL_SEARCH_SPACE.open(encoding="utf-8") as file:
+        search_space = json.load(file)
+    search_space["move_weights"] = {
+        name: (1.0 if name == "sa_count" else 0.0)
+        for name in search_space["move_weights"]
+    }
+    return search_space
+
+
+def _fake_prepare(cache, arch_dict, shape):
+    return main.build_scheduler_system(GEMMWorkload(*shape), arch_dict)
+
+
 def _restricted_search_space(architecture):
-    """Single-value architecture knobs so only the profile can change cost."""
+    """Single-value architecture knobs so only the workload mapping can move."""
     fpga = architecture["Chiplet_2"]
     sa = architecture["Chiplet_1"]
     return {
@@ -76,10 +98,6 @@ class AtlasAnnealingTests(unittest.TestCase):
         self.architecture = _load(ARCHITECTURE)
         self.graph = load_atlas_graph(GRAPH)
         self.reference = load_evaluation_profile(REFERENCE_PROFILE)
-        self.bad_profiles = [
-            load_evaluation_profile(path) for path in BAD_PROFILE_PATHS
-        ]
-        self.candidate_profiles = [self.reference, *self.bad_profiles]
         self.objective = build_atlas_objective()
 
     def _cache(self, directory):
@@ -100,7 +118,7 @@ class AtlasAnnealingTests(unittest.TestCase):
                 )
         return cost
 
-    def _run(self, seed):
+    def _run(self, seed, **overrides):
         with tempfile.TemporaryDirectory() as directory:
             cache_file = Path(directory) / "cache.csv"
             pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_file, index=False)
@@ -118,29 +136,51 @@ class AtlasAnnealingTests(unittest.TestCase):
                     cooling_rate=0.5,
                     calibration_iterations=1,
                     random_seed=seed,
-                    initial_architecture=self.architecture,
+                    initial_architecture=overrides.pop(
+                        "initial_architecture", self.architecture
+                    ),
                     atlas_graph=self.graph,
                     atlas_profile=self.reference,
                     atlas_search_space=_restricted_search_space(self.architecture),
                     atlas_objective=self.objective,
-                    candidate_profiles=self.candidate_profiles,
+                    **overrides,
                 )
 
-    def test_annealing_selects_the_good_profile(self):
+    def test_annealing_returns_one_design_point_that_can_start_a_run(self):
+        _, best_architecture, trace, _ = self._run(seed=11)
+        document = trace.attrs["best_design_point"]
+        loaded = parse_design_point(document)
+
+        self.assertEqual(loaded.architecture.keys(), best_architecture.keys())
+        self.assertEqual(
+            loaded.mapping.fingerprint(),
+            trace.attrs["best_workload_mapping_fingerprint"],
+        )
+        self.assertEqual(document["workload"]["fingerprint"], self.graph.fingerprint())
+        self.assertEqual(document["evaluated_with"]["profile"], "atlas_modular_v1")
+
+        # A run that starts from the file does not build a first mapping.
+        with patch(
+            "main.initial_workload_mapping",
+            side_effect=AssertionError("the file gives the first mapping"),
+        ):
+            _, _, restarted, _ = self._run(
+                seed=11,
+                initial_architecture=loaded.architecture,
+                initial_mapping=loaded.mapping,
+            )
+        self.assertIn("best_design_point", restarted.attrs)
+
+    def test_annealing_keeps_the_evaluation_profile_constant(self):
         reference_cost = self._reference_cost()
         best_cost, _, trace, _ = self._run(seed=2026)
         self.assertEqual(trace.attrs["atlas"], True)
         self.assertEqual(trace.attrs["best_profile"]["profile"], "atlas_modular_v1")
+        self.assertEqual(set(trace["profile_name"].dropna()), {"atlas_modular_v1"})
+        self.assertEqual(
+            trace["profile_fingerprint"].dropna().nunique(), 1
+        )
         self.assertAlmostEqual(best_cost, reference_cost, places=6)
-
-    def test_every_bad_profile_candidate_scores_worse(self):
-        reference_cost = self._reference_cost()
-        _, _, trace, _ = self._run(seed=99)
-        bad_names = {profile.name for profile in self.bad_profiles}
-        bad_rows = trace[trace["profile_name"].isin(bad_names)]
-        bad_rows = bad_rows[bad_rows["new_cost"].notna()]
-        self.assertGreater(len(bad_rows), 0, "expected at least one bad proposal")
-        self.assertTrue((bad_rows["new_cost"] > reference_cost).all())
 
     def test_annealing_is_seeded_deterministic(self):
         first = self._run(seed=5)
@@ -151,14 +191,19 @@ class AtlasAnnealingTests(unittest.TestCase):
             second[2]["new_cost"].fillna(-1).tolist(),
         )
 
-    def test_trace_records_profile_identity(self):
+    def test_trace_records_the_workload_mapping(self):
         _, _, trace, _ = self._run(seed=11)
         self.assertIn("profile_name", trace.columns)
         self.assertIn("profile_fingerprint", trace.columns)
+        self.assertIn("mapping_fingerprint", trace.columns)
+        self.assertGreater(trace["mapping_fingerprint"].dropna().nunique(), 1)
+        best_mapping = trace.attrs["best_workload_mapping"]
         self.assertEqual(
-            set(trace.attrs["candidate_profiles"]),
-            {"atlas_modular_v1", "ph_slow_gemm_v1", "ph_dram_always_v1",
-             "ph_pessimistic_transfer_v1"},
+            [operation["operation"] for operation in best_mapping["operations"]],
+            [operation.operation_id for operation in self.graph.operations],
+        )
+        self.assertEqual(
+            len(best_mapping["handoffs"]), len(self.graph.operations) - 1
         )
 
     def test_sequential_gemm_entry_uses_the_modular_annealer(self):
@@ -286,6 +331,60 @@ class AtlasAnnealingTests(unittest.TestCase):
             self.assertIs(result, expected)
             self.assertEqual(calibration_path.read_bytes(), original_bytes)
             self.assertEqual(modular.call_args.kwargs["objective"].objective_id, "t1")
+
+    def test_multi_sa_candidates_evaluate_and_are_traced(self):
+        multi_profile = load_evaluation_profile(MULTI_SA_PROFILE)
+        search_space = _sa_only_search_space()
+        objective = build_atlas_objective()
+        evaluated = []
+        real_evaluate = main.evaluate_atlas_design_point
+
+        def spy(
+            cache, architecture, graph, profile, objective, registry=None, mapping=None
+        ):
+            result = real_evaluate(
+                cache,
+                architecture,
+                graph,
+                profile,
+                objective,
+                registry=registry,
+                mapping=mapping,
+            )
+            evaluated.append(architecture)
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "cache.csv"
+            pd.DataFrame(columns=CACHE_COLUMNS).to_csv(cache_file, index=False)
+            with (
+                patch("main.evaluate_atlas_design_point", side_effect=spy),
+                patch("main.prepare_single_gemm", side_effect=_fake_prepare),
+                patch("main.simulate_single_gemm", return_value=dict(SIMULATED_GEMM)),
+            ):
+                _, _, trace, _ = main.sim_annealing(
+                    wl_idx=None,
+                    workload_sequence=None,
+                    cache_file=str(cache_file),
+                    run_name=str(Path(directory) / "sim"),
+                    cost_profile="t1",
+                    initial_temp=4.0,
+                    freezing_temp=0.5,
+                    max_move_per_temp_step=6,
+                    cooling_rate=0.5,
+                    calibration_iterations=1,
+                    random_seed=7,
+                    initial_architecture=self.architecture,
+                    atlas_graph=self.graph,
+                    atlas_profile=multi_profile,
+                    atlas_search_space=search_space,
+                    atlas_objective=objective,
+                )
+
+        counts = {_sa_count(architecture) for architecture in evaluated}
+        self.assertIn(1, counts)
+        self.assertTrue(any(count > 1 for count in counts), counts)
+        self.assertTrue(bool((trace["proposal_valid"]).any()))
 
 
 if __name__ == "__main__":

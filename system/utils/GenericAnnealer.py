@@ -85,7 +85,6 @@ def anneal(
     best_design = copy.deepcopy(current_design)
     best_evaluation = current_evaluation
     best_cost = current_cost
-    best_identity = identity(best_design)
     temperature = float(initial_temperature)
     attempt = 0
     trace = []
@@ -157,7 +156,25 @@ def anneal(
                 level_rows.append(row)
                 continue
 
-            candidate_evaluation, candidate_cost = evaluate(candidate)
+            try:
+                candidate_evaluation, candidate_cost = evaluate(candidate)
+            except UnsupportedEvaluation as error:
+                row.update(
+                    {
+                        "candidate_identity": candidate_identity,
+                        "candidate_evaluation": None,
+                        "candidate_cost": None,
+                        "cost_diff": None,
+                        "move_accepted": False,
+                        "acceptance_reason": "evaluation_error",
+                        "proposal_error": str(error),
+                        "current_cost_after": current_cost,
+                        "best_cost_after": best_cost,
+                    }
+                )
+                trace.append(row)
+                level_rows.append(row)
+                continue
             candidate_cost = float(candidate_cost)
             if not math.isfinite(candidate_cost):
                 raise ValueError("candidate design has a non-finite objective")
@@ -177,16 +194,10 @@ def anneal(
                 current_evaluation = candidate_evaluation
                 current_cost = candidate_cost
 
-                improves_best = candidate_cost < best_cost
-                wins_tie = (
-                    candidate_cost == best_cost
-                    and candidate_identity < best_identity
-                )
-                if improves_best or wins_tie:
+                if candidate_cost < best_cost:
                     best_design = copy.deepcopy(candidate)
                     best_evaluation = candidate_evaluation
                     best_cost = candidate_cost
-                    best_identity = candidate_identity
 
             row.update(
                 {
