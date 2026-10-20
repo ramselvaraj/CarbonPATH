@@ -84,8 +84,8 @@ these tables.
 | Leaky and thresholded ReLU on the FPGA | Same lanes and energy as ReLU | `legacy_fpga_<type>_v1` in `system/utils/NonGemmEstimator.py`; reads the `relu_implementation` of the FPGA | Assumption; no implementation data for these types |
 | Leaky and thresholded ReLU in rule4ml | ReLU prediction | `RULE4ML_ACTIVATIONS` in `system/utils/Rule4MlEvaluators.py` | Assumption; rule4ml has predictors for ReLU, sigmoid, tanh, and softmax only |
 | Sigmoid and tanh energy | `0 pJ` for each element | `energy_per_element_pj` setting of `rule4ml_fpga_<type>_v1`; default in `system/utils/Rule4MlEvaluators.py` | Placeholder assumption; rule4ml gives latency only |
-| Dummy fused ReLU cost | `0.01 ns` and `0.05 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`relu@sa`) | Dummy values; no source |
-| Dummy fused sigmoid and tanh cost | `0.1 ns` and `0.5 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`sigmoid@sa`, `tanh@sa`) | Dummy values; no source. The lookup table adds no area or power to the SA |
+| Dummy fused ReLU cost | `1` SA cycle for each group of SA-width elements (latency = groups for one SA x cycles / SA clock) and `0.05 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`relu@sa`) | Dummy values; no source |
+| Dummy fused sigmoid and tanh cost | `10` SA cycles for each group of SA-width elements and `0.5 pJ` for each element | `cfg/profiles/rule4ml_fused_dummy_v0.json` (`sigmoid@sa`, `tanh@sa`) | Dummy values; no source. The lookup table adds no area or power to the SA |
 | Fused ReLU area and power | `0` added to the SA | Not modeled; `get_area_power` in `chiplet/n_utils.py` is unchanged | Placeholder assumption; fusion has no hardware cost |
 | Calibration sample count | `10` | `network.py:433` | Hardcoded operational assumption |
 | Default cost profile | `t1` | `network.py:408` | Behavioral default, not a physical rate |
@@ -120,3 +120,11 @@ not be mistaken for sourced assumptions.
   visibly apply `EMIBLayers`.
 - The apparent unit of `Power_per_core=10`, the defect-density units, CPA units,
   and the units of several packaging dimensions are not declared in code.
+
+## FPGA board (added with the Rule4ML board limit)
+
+| Input | Value | Source | Basis |
+| --- | --- | --- | --- |
+| FPGA board | `pynq-z2`, `zcu102`, `alveo-u200`, `alveo-u250` | `fpga.boards` in `cfg/experiments/atlas_modular_search_space*.json` | The boards that Rule4ML supports. The `fpga_board` move changes the whole board. |
+| FPGA chiplet resources | The board capacities (CLB = LUT / 8) | `board_chiplet_fields` in `system/utils/Rule4MlBoards.py` | Board table of Rule4ML |
+| FPGA chiplet area and power | `10 mm2` and `2 W` for each 80,000 LUTs of the board | `board_chiplet_fields` | Assumed rate: linear in LUT count from the example chiplet |
