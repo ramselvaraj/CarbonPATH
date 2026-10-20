@@ -2,10 +2,8 @@
 
 Run from the repo root: PYTHONPATH=. python script/rule4ml_unfused_experiment.py > out.csv
 
-Variants (profile rule4ml_fused_dummy_v0):
-  unfused    every activation on the FPGA (Rule4ML)
-  sig_tanh   sigmoid and tanh fused on the SA; relu stays on the FPGA
-  all_fused  relu, sigmoid and tanh fused on the SA
+Variants (profile rule4ml_fused_dummy_v0): every on/off combination of fusing
+relu, sigmoid and tanh (8 variants), named "unfused" or "fused_<types>".
 Softmax is never fusable. It always runs on the FPGA.
 One row per (variant, board, FPGA clock, operation).
 """
@@ -29,7 +27,13 @@ GRAPH = load_atlas_graph(Path("cfg/examples/atlas/dense_rule4ml_activations.grap
 PROFILE = load_evaluation_profile(Path("cfg/profiles/rule4ml_fused_dummy_v0.json"))
 BOARDS = ["pynq-z2", "zcu102", "alveo-u200", "alveo-u250"]
 CLOCKS_MHZ = [200, 300, 400]
-VARIANTS = {"unfused": (), "sig_tanh": ("sigmoid", "tanh"), "all_fused": ("relu", "sigmoid", "tanh")}
+import itertools
+_TYPES = ("relu", "sigmoid", "tanh")
+VARIANTS = {
+    ("fused_" + "+".join(c) if c else "unfused"): c
+    for n in range(len(_TYPES) + 1)
+    for c in itertools.combinations(_TYPES, n)
+}
 
 d = tempfile.mkdtemp()
 pd.DataFrame(columns=["core_size", "data_flow", "bandwidth", "buffer_size", "M", "K", "N", "latency"]).to_csv(
