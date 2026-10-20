@@ -135,6 +135,38 @@ Source: Rahimifar et al. 2024, sections 3 to 6.
 What it means for us: the sigmoid prediction of 57 cycles is as large as the typical error of the cycle model
 (40 to 60 cycles). Treat the activation cycle counts as order of magnitude, not exact.
 
+## Assumptions stated by the authors
+
+Rule4ML paper (Rahimifar et al. 2024):
+
+- Latency means clock cycles for one inference of the whole network.
+- Fixed 10 ns clock period for all training and test data.
+- Only fully connected networks. Convolution is left out to keep synthesis fast.
+- One global precision and one global strategy for each network. Reuse factor can change for each layer.
+- Resources are percentages of the board. Values above 200% are capped, because the authors expect
+  such a network to fail implementation.
+- Error under 10% counts as acceptable for resources. A cycle error under 100 (1 us) counts as satisfactory.
+- HLS synthesis reports only, not Vivado implementation reports. HLS overestimates LUTs. The authors
+  prefer overestimation to underestimation.
+- Alveo-U200 was left out of the benchmark tables because it is in the same family as ZCU102.
+- Warnings from the authors:
+    - Some training networks gave odd results (reuse factor up, DSP not down) at 2-bit and 8-bit.
+    - The dataset has mostly large boards and low precision, so reuse factor has a weak effect on resources.
+    - FF is hard to predict. The authors do not know which factors drive it.
+    - A 5 ns clock raised FF use a lot. The data has no other clock.
+
+wa-hls4ml (poster, Hawks et al. 2026, with the Rule4ML authors; Zotero):
+
+- 683,176 synthesized samples, built with hls4ml and AMD Vitis. (Rule4ML: Vivado HLS 2019.1.)
+- Mostly random neural network architectures within set limits, plus example networks from science.
+- Two surrogate models on the same data, inputs, and outputs: a transformer and a graph neural network (GNN).
+- Inputs: the network architecture and the hls4ml conversion parameters.
+- Outputs: 6 resource and latency values, predicted together by one model. (Rule4ML: one MLP for each output.)
+- The targets are the final synthesized values. Metric: relative percent error.
+- Stated next steps: larger networks, skip connections, more hardware settings (such as reuse factors), more samples.
+- Not known (the poster does not say): clock period, boards, precisions, I/O type, layer limits, GNN training
+  details, and whether a standalone activation is covered. The full paper and the dataset card were not read.
+
 ## Future enhancements stated by Rule4ML
 
 From the paper (Discussion) and the repo README ("Limitations"):
