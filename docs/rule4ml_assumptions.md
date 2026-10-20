@@ -110,6 +110,30 @@ Findings:
 Conclusion for now: use the cycle counts for sigmoid, tanh, and softmax as rough, size-dependent
 estimates. Do not use the DSP and LUT numbers for a ReLU. Treat the 191 ns as 57 predicted cycles at an assumed 300 MHz clock, not as a measured kernel latency.
 
+## What the paper says about accuracy and scope (task 4: paper read in full)
+
+Source: Rahimifar et al. 2024, sections 3 to 6.
+
+- Features: counts of layers and activation types, average dense-layer size and reuse, and counts of fixed-point
+  operations (add, multiply, logical, lookup) times the precision. Tensor shapes are not features.
+  This is why only the element count matters (finding 1 above).
+- Resources are trained as a percentage of the board, capped at 200%. Cycles are trained as an absolute error.
+- Latency means clock cycles for one inference of the whole network.
+- Cycle error on the test set: median about 40, mean about 60, worst about 500 cycles. On the benchmarks, 85% of
+  errors are below 100 cycles. The paper calls this "less than 1 us at 10 ns".
+- Resource error: 81% of predictions are within 10%. By resource: BRAM 80%, DSP 89%, FF 88%, LUT 66%.
+- The predictors tend to overestimate resources. Vivado HLS also overestimates LUTs.
+- The benchmarks are only dense networks with ReLU and Softmax (Top Quarks has one Sigmoid). Tanh and
+  standalone activations are never tested. Benchmark boards are ZCU102 and Pynq-Z2. Alveo-U200 was left out
+  as "similar to ZCU102".
+- Only FCNNs. The authors expect CNNs to use more DSPs.
+- Softmax correlates with DSP use even though HLS4ML builds it from lookup tables. This matches our softmax DSP count.
+- Vivado fails on layers over 4096 parameters in `Latency` strategy (MNIST). Not a limit for our activations.
+- A 5 ns clock raised FF use a lot. A 10 ns clock is the only one in the data.
+
+What it means for us: the sigmoid prediction of 57 cycles is as large as the typical error of the cycle model
+(40 to 60 cycles). Treat the activation cycle counts as order of magnitude, not exact.
+
 ## Future enhancements stated by Rule4ML
 
 From the paper (Discussion) and the repo README ("Limitations"):
@@ -135,3 +159,8 @@ Not stated by the authors, but a lead for us: `datasets/analysis/` in the repo h
 | 9 | ReLU gets 0 cycles but about 5.5k LUT and 63 DSP; resource numbers have an offset | open |
 | 5 | Tensor shapes may fall outside the training ranges | open |
 | 6 | Leaky ReLU and thresholded ReLU are not in the training activations | open |
+| 10 | The typical cycle error (40 to 60 cycles) is as large as the predicted activation latency (57 cycles) | open |
+| 11 | No standalone activation, and no tanh, in the paper benchmarks; sigmoid only once | open |
+| 12 | Resources are percentages of the board, capped at 200%, and tend to be overestimated | open |
+| 13 | Alveo-U200 was not validated; Alveo-U250 is not in the training data | open |
+| 14 | Only FCNNs; Rule4ML says nothing about a GEMM done on a systolic array | open |
