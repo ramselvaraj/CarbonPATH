@@ -105,27 +105,57 @@ Consequences:
 
 ## Pragmas and parallelism
 
-- Rule4ML has no pragma input. hls4ml writes the pragmas from strategy, reuse factor, and precision.
+- Rule4ML has no pragma input. hls4ml writes the pragmas from strategy, reuse factor, precision, and I/O type.
 - Training data used hls4ml 0.8.1 and 1.1.0. The version is a model input.
 - hls4ml is not installed with Rule4ML. I read the fork `atlas/hls4ml-gemm` on the remote machine
-  (`itsruthwik/hls4ml-gemm`). It is newer than the training versions, so treat these pragmas as
+  (`itsruthwik/hls4ml-gemm`, commit `b8cc1092`). It is newer than the training versions, so treat all of this as
   "very likely the same", not verified.
+
+Whole-network pragma. The default `PipelineStyle` is `auto`. The rule (`backends/vivado/passes/pipeline_style.py`) is:
+
+| Case | Whole-network pragma |
+| --- | --- |
+| `io_stream` | `DATAFLOW` |
+| A conv layer with more than one partition | `DATAFLOW` |
+| Any layer uses the Resource strategy (also with `io_parallel`) | `DATAFLOW` |
+| `io_parallel` with Latency strategy | `PIPELINE` |
+
+- `DATAFLOW`: each layer is its own stage, and stages overlap for successive inputs. One inference takes the sum of the
+  stage latencies. Most of wa-hls4ml uses the Resource strategy, so most of it is `DATAFLOW`.
+- `PIPELINE`: the whole network is one unrolled pipeline. Only Latency strategy with `io_parallel`.
+
+Port pragmas of the network function (`writer/vivado_writer.py:442-462`):
+
+| I/O type | Pragmas |
+| --- | --- |
+| `io_parallel` | `ARRAY_PARTITION` on the input and output arrays, `INTERFACE ap_vld` |
+| `io_stream` | `INTERFACE axis`. FIFOs between layers (`STREAM` with a depth). No partition of the I/O. |
+
+Layer pragmas:
 
 | Level | Pragma | Where |
 | --- | --- | --- |
-| Whole model | `#pragma HLS PIPELINE` (default style, optional II) | `writer/vivado_writer.py:436` |
-| Model I/O (`io_parallel`) | `ARRAY_PARTITION` on input and output, `INTERFACE ap_vld` | `writer/vivado_writer.py:443-450` |
 | Dense, Latency strategy | `PIPELINE II=reuse_factor`, arrays `complete`, `ALLOCATION mul limit=multiplier_limit` | `nnet_dense_latency.h:26-33` |
 | Dense, Resource strategy | `ARRAY_RESHAPE weights block`, `PIPELINE II=1 rewind`, weights in ROM | `nnet_dense_resource.h:29-56` |
+| Dense, `io_stream` | `INLINE recursive`, `PIPELINE II=reuse_factor`, `ARRAY_PARTITION complete`, `UNROLL` | `nnet_dense_stream.h` |
 | Activation | `PIPELINE` per element loop; table lookup for sigmoid and tanh | `nnet_activation.h` |
 | Softmax | `PIPELINE`, exp and inverse tables, `array_partition complete` | `nnet_activation.h:176-270` |
+
+Other pragma types in the fork (count of uses): `UNROLL` 357, `ARRAY_PARTITION` 233, `PIPELINE` 192, `INLINE` 116,
+`ALLOCATION` 24, `LOOP_FLATTEN` 15, `ARRAY_RESHAPE` 14, `function_instantiate` 12, `STREAM` 10, `DATAFLOW` 6, `RESOURCE` 4,
+`INTERFACE` 4, and one each of `BIND_STORAGE`, `AGGREGATE`, `data_pack`.
+
+The `VivadoAccelerator` backend (used by `nn_synth.py`) adds an AXI wrapper `<project>_axi` with copy loops for the input
+and output. The HLS top function is the network function, not the wrapper (`templates/vivado/build_prj.tcl:154`,
+`set_top ${project_name}`). So the C synthesis cycle count does not include the wrapper loops.
 
 What this means:
 
 - Unrolling is not a free choice. Reuse factor sets `II` (Latency) or the block size (Resource). All of this comes from the config, not from the user.
-- The whole model is one pipelined function. The reported cycles are the pass latency for one input, with all inputs read at once (`ap_vld`).
+- The pragmas enhance the design (pipeline, partition, unroll, dataflow). They are not a bare baseline.
 - Sigmoid and tanh use a table (`table_size` 1024 by default), so they cost BRAM or LUTs for the table, not DSPs for the math.
-- The pragmas enhance the design (pipeline, partition, unroll). They are not a bare baseline.
+- With `DATAFLOW` (Resource strategy), `CYCLES` is the pass latency and `INTERVAL` is the time before the next input.
+  With `PIPELINE`, the two are close. CarbonPATH uses `CYCLES`.
 
 ## Activation predictions
 
