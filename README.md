@@ -311,6 +311,11 @@ run on the FPGA with the rule4ml evaluators. The profiles
 `cfg/profiles/rule4ml_fused_activations_v1.json` name an evaluator for each
 type, and `cfg/examples/atlas/dense_activations.graph_dump.json` has all four.
 
+Rule4ML takes the workload (the activation and its element count) and the board.
+It returns LUTs, DSPs, BRAMs, FFs, and the latency in cycles. The frequency is
+not an input. CarbonPATH divides the cycles by the Fmax for the design (the
+`frequency_hz` of the FPGA chiplet). See `docs/rule4ml_assumptions.md`.
+
 A placeholder policy catalog
 (`cfg/profiles/placeholders/`, `system/utils/PlaceholderPolicies.py`) supplies
 deliberately bad movement, transfer, and GEMM policies so the annealer can be

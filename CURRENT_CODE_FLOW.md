@@ -250,6 +250,26 @@ The trace DataFrame returned in ATLAS mode carries
   `cfg/profiles/rule4ml_fused_activations_v1.json` name an evaluator for each
   type.
 
+### Rule4ML inputs and outputs
+
+`system/utils/Rule4MlEvaluators.py` calls Rule4ML for one activation on the
+FPGA. Details and caveats are in `docs/rule4ml_assumptions.md`.
+
+| | Item | Where it comes from |
+| --- | --- | --- |
+| Input | Workload: the activation type and its element count | The ATLAS graph operation |
+| Input | Board: `pynq-z2`, `zcu102`, `alveo-u200`, or `alveo-u250` | `board` of the FPGA chiplet, or the nearest board |
+| Input | Precision, strategy, reuse factor, tool versions | The tensor precision and the evaluator settings |
+| Output | LUT, FF, DSP, BRAM | Rule4ML |
+| Output | Latency in cycles (`CYCLES`, or `INTERVAL`) | Rule4ML |
+
+- The frequency is not an input to Rule4ML. Rule4ML was trained at a fixed
+  10 ns clock.
+- CarbonPATH turns cycles into time with the Fmax for the design: the
+  `frequency_hz` of the FPGA chiplet. Time = cycles / Fmax.
+- Rule4ML gives no energy. The FPGA activations get 0 pJ unless a profile sets
+  `energy_per_element_pj`.
+
 ### Fused ReLU
 
 `system/utils/FusedActivation.py` owns the fused ReLU: the movement policy
