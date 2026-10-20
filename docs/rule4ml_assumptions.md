@@ -5,8 +5,9 @@ Living document. Source: Rahimifar et al. 2024 (Zotero) and the Rule4ML repo
 
 ## Inputs and outputs
 
-- Inputs: Keras workload, board, strategy, precision, reuse factor. Frequency is not an input.
-- Outputs: LUT, DSP, BRAM, FF, and `CYCLES` / `INTERVAL`. These are cycle counts, not time.
+- Inputs: Keras or PyTorch workload, board, strategy, precision, reuse factor, hls4ml version, Vivado version
+  (2019.1 to 2024.2). Frequency is not an input. The clock period (10 ns) and `io_parallel` are fixed in the data.
+- Outputs: LUT, DSP, BRAM, FF (counts and percent of the board), and `CYCLES` / `INTERVAL`. The last two are cycle counts, not time.
 - Time = cycles x the design clock period (Fmax for the design).
 
 ## Training data (task 7: kernel I/O assumptions)
@@ -16,7 +17,7 @@ Living document. Source: Rahimifar et al. 2024 (Zotero) and the Rule4ML repo
 | I/O type | `io_parallel` only | `nn_synth.py:86` |
 | Backend | `VivadoAccelerator`, Vivado 2019.1 | `nn_synth.py:88-89` |
 | Clock period | 10 ns, fixed | `nn_synth.py:85` |
-| Boards | pynq-z2, zcu102, alveo-u200 (the repo board table also has alveo-u250) | `nn_synth.py:83` |
+| Boards | pynq-z2, zcu102, alveo-u200 in the paper and `nn_synth.py:83`. The installed predictor and the repo board table also accept alveo-u250. Not checked if u250 is in the training data. | `nn_synth.py:83`, paper Table 1 |
 | Strategy | Latency, Resource (global) | `nn_synth.py:82` |
 | Precision | `ap_fixed<2,1>`, `<8,3>`, `<8,4>`, `<16,6>` (global) | `nn_synth.py:74-81` |
 | Reuse factor | 1 to 64, powers of 2 (per layer) | `nn_synth.py:73` |
@@ -162,5 +163,5 @@ Not stated by the authors, but a lead for us: `datasets/analysis/` in the repo h
 | 10 | The typical cycle error (40 to 60 cycles) is as large as the predicted activation latency (57 cycles) | open |
 | 11 | No standalone activation, and no tanh, in the paper benchmarks; sigmoid only once | open |
 | 12 | Resources are percentages of the board, capped at 200%, and tend to be overestimated | open |
-| 13 | Alveo-U200 was not validated; Alveo-U250 is not in the training data | open |
+| 13 | Alveo-U200 was not validated in the paper. The paper lists 3 boards; the installed predictor accepts 4 (alveo-u250). Not checked if u250 has training data | open |
 | 14 | Only FCNNs; Rule4ML says nothing about a GEMM done on a systolic array | open |
