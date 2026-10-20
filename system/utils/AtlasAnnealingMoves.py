@@ -21,6 +21,7 @@ import math
 import random
 
 from chiplet.n_utils import get_area_power, get_sram_area_energy
+from system.utils.Rule4MlBoards import board_chiplet_fields
 from system.utils.ArchitectureModel import (
     regenerate_memory_channels,
     rebuild_package_for_endpoints,
@@ -53,9 +54,7 @@ MOVE_TYPES = (
     "handoff_movement",
     "relu_fusion",
     "fpga_count",
-    "fpga_clbs",
-    "fpga_brams",
-    "fpga_dsps",
+    "fpga_board",
     "fpga_frequency",
     "fpga_relu",
     "mem_type",
@@ -64,7 +63,6 @@ MOVE_TYPES = (
     "transfer_model",
 )
 
-_FPGA_FIELDS = {"fpga_clbs": "clbs", "fpga_brams": "brams", "fpga_dsps": "dsps"}
 _GEMM_SETTING_MOVES = {
     "gemm_dataflow": "dataflow",
     "gemm_split_k": "split_k",
@@ -447,6 +445,16 @@ def mutate_atlas_design_point(
         candidate_moves.remove("sa_count")
 
     endpoints = validate_atlas_architecture(architecture)
+    boards = params.get("fpga", {}).get("boards")
+    if boards is None:
+        candidate_moves.remove("fpga_board")
+    else:
+        for fpga_key in endpoints.fpga_keys:
+            if architecture[fpga_key].get("board") not in boards:
+                raise UnsupportedEvaluation(
+                    f"{fpga_key} must name one of the search space boards "
+                    f"({', '.join(boards)}) with its 'board' field"
+                )
     if not endpoints.fpga_keys:
         candidate_moves = [
             candidate
@@ -532,13 +540,13 @@ def _apply_move(
             "SA SRAM size",
         )
         _refresh_sa_area_power(sa)
-    elif move in _FPGA_FIELDS:
+    elif move == "fpga_board":
         fpga_key = rng.choice(endpoints.fpga_keys)
         fpga = moved[fpga_key]
-        field = _FPGA_FIELDS[move]
-        fpga[field] = _choose_alternative(
-            rng, params["fpga"][field], fpga[field], f"FPGA {field}"
+        board = _choose_alternative(
+            rng, params["fpga"]["boards"], fpga.get("board"), "FPGA board"
         )
+        fpga.update(board_chiplet_fields(board))
     elif move == "fpga_frequency":
         fpga_key = rng.choice(endpoints.fpga_keys)
         fpga = moved[fpga_key]

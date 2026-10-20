@@ -12,7 +12,8 @@ the unit tests stub the prediction call.
 
 Evaluator settings, read from the profile's per-operation ``settings`` object:
 
-* ``board``                   rule4ml board; default is the nearest board.
+* ``board``                   rule4ml board; default is the board of the FPGA
+                              chiplet, or the nearest board when it names none.
 * ``strategy``                ``latency`` or ``resource`` (default ``latency``).
 * ``precision``               HLS precision; default from the ATLAS tensor.
 * ``reuse_factor``            HLS reuse factor; default from the ATLAS attribute.
@@ -70,6 +71,9 @@ def rule4ml_precision(precision):
     if match is None:
         return _DEFAULT_PRECISION
     return f"ap_fixed<{match.group(1)}, {match.group(2)}>"
+
+#: The operation types that rule4ml has a trained predictor for.
+RULE4ML_SUPPORTED_OPERATIONS = ("relu", "sigmoid", "tanh", "softmax")
 
 _WRAPPER = None
 _KERAS_MODELS = {}
@@ -224,6 +228,12 @@ class Rule4MlActivationEvaluator(OperationEvaluator):
     activation = ""
 
     def evaluate(self, evaluator_input, assignment, context) -> OperationEstimate:
+        if self.operation_type not in RULE4ML_SUPPORTED_OPERATIONS:
+            raise UnsupportedEvaluation(
+                f"{evaluator_input.operation_id}: rule4ml has no predictor for "
+                f"'{self.operation_type}'; it supports "
+                + ", ".join(RULE4ML_SUPPORTED_OPERATIONS)
+            )
         fpga = context.system.fpga_chiplet_dict.get(assignment.endpoint_id)
         if fpga is None:
             raise UnsupportedEvaluation(
@@ -267,7 +277,7 @@ class Rule4MlActivationEvaluator(OperationEvaluator):
                 "rule4ml reuse_factor must be a positive integer"
             )
 
-        board = settings.get("board") or nearest_board(fpga)
+        board = settings.get("board") or fpga.board or nearest_board(fpga)
         prediction = predict_activation(
             activation=self.activation,
             shape=evaluator_input.shape,
@@ -322,7 +332,8 @@ class Rule4MlSoftmaxEvaluator(Rule4MlActivationEvaluator):
 
 #: The rule4ml activation that predicts each other operation type. rule4ml
 #: has predictors for ReLU, sigmoid, tanh, and softmax only. A leaky or
-#: thresholded ReLU uses the ReLU prediction: an assumed rate.
+#: thresholded ReLU keeps its entry so that a rule4ml profile names the
+#: evaluator, but the evaluator raises: rule4ml does not support the operation.
 RULE4ML_ACTIVATIONS = {
     "leaky_relu": "relu",
     "thresholded_relu": "relu",

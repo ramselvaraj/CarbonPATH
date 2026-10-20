@@ -15,6 +15,8 @@ from system.utils.AtlasGraphAdapter import load_atlas_graph
 from system.utils.EvaluationProfile import load_evaluation_profile
 from system.utils.WorkloadMapping import initial_workload_mapping
 from system.utils.ChipletSystem import ChipletSystem
+from system.utils.FpgaChiplet import FpgaChiplet
+from system.utils.Rule4MlBoards import board_chiplet_fields, load_boards
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
@@ -103,6 +105,63 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
             self.assertNotEqual(moved, self.architecture)
             self.assertEqual(mapping, self._mapping(self.architecture))
 
+    def test_fpga_board_move_sets_a_whole_board(self):
+        params = copy.deepcopy(self.search_space)
+        params["move_weights"] = {"fpga_board": 1.0}
+
+        for seed in range(10):
+            moved, _, move = mutate_atlas_design_point(
+                self.architecture,
+                self._mapping(self.architecture),
+                params,
+                rng=random.Random(seed),
+            )
+
+            fpga = moved["Chiplet_2"]
+            self.assertEqual(move, "fpga_board")
+            self.assertIn(fpga["board"], params["fpga"]["boards"])
+            self.assertNotEqual(fpga["board"], self.architecture["Chiplet_2"]["board"])
+            expected = board_chiplet_fields(fpga["board"])
+            for name, value in expected.items():
+                self.assertEqual(fpga[name], value)
+            FpgaChiplet.from_dict("Chiplet_2", fpga)
+
+    def test_board_area_and_power_scale_with_the_luts(self):
+        boards = load_boards()
+        for board, capacities in boards.items():
+            fields = board_chiplet_fields(board)
+            self.assertAlmostEqual(fields["area"], 10.0 * capacities["max_lut"] / 80000)
+            self.assertAlmostEqual(fields["power"], 2.0 * capacities["max_lut"] / 80000)
+
+    def test_fpga_without_a_search_space_board_is_rejected(self):
+        for board in (None, "not-a-board"):
+            with self.subTest(board=board):
+                architecture = copy.deepcopy(self.architecture)
+                if board is None:
+                    del architecture["Chiplet_2"]["board"]
+                else:
+                    architecture["Chiplet_2"]["board"] = board
+
+                with self.assertRaisesRegex(UnsupportedEvaluation, "'board' field"):
+                    mutate_atlas_design_point(
+                        architecture,
+                        self._mapping(self.architecture),
+                        self.search_space,
+                        rng=random.Random(1),
+                    )
+
+    def test_fpga_chiplet_must_match_its_board(self):
+        fpga = copy.deepcopy(self.architecture["Chiplet_2"])
+        FpgaChiplet.from_dict("Chiplet_2", fpga)
+
+        unknown = dict(fpga, board="not-a-board")
+        with self.assertRaisesRegex(ValueError, "board must be one of"):
+            FpgaChiplet.from_dict("Chiplet_2", unknown)
+
+        mismatch = dict(fpga, clbs=fpga["clbs"] + 1)
+        with self.assertRaisesRegex(ValueError, "clbs is"):
+            FpgaChiplet.from_dict("Chiplet_2", mismatch)
+
     def test_unknown_move_weight_is_rejected(self):
         params = copy.deepcopy(self.search_space)
         params["move_weights"] = {"invented_move": 1.0}
@@ -126,7 +185,7 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
             "mem_pkg_conn": {"mem_type": "ddr5", "Chiplet_1": 8},
         }
         params = copy.deepcopy(self.search_space)
-        params["move_weights"] = {"fpga_clbs": 1.0}
+        params["move_weights"] = {"fpga_board": 1.0}
 
         with self.assertRaisesRegex(UnsupportedEvaluation, "enabled move"):
             mutate_atlas_design_point(
@@ -147,7 +206,7 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
             "mem_pkg_conn": {"mem_type": "ddr5", "Chiplet_1": 8},
         }
         params = copy.deepcopy(self.search_space)
-        params["move_weights"] = {"fpga_clbs": -1.0, "sa_array": 1.0}
+        params["move_weights"] = {"fpga_board": -1.0, "sa_array": 1.0}
 
         with self.assertRaisesRegex(UnsupportedEvaluation, "finite non-negative"):
             mutate_atlas_design_point(

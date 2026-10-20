@@ -22,6 +22,12 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 LUTS_PER_CLB = 8
 FFS_PER_LUT = 2
 
+# An FPGA chiplet of a board has area and power in proportion to the LUTs of
+# the board. The reference is the example chiplet: 80,000 LUTs, 10 mm2, 2 W.
+REFERENCE_LUTS = 80_000
+REFERENCE_AREA_MM2 = 10.0
+REFERENCE_POWER_W = 2.0
+
 _RESOURCE_DIMENSIONS = ("lut", "ff", "bram", "dsp")
 
 # Mirrors rule4ml/parsers/supported_boards.json. Used only when rule4ml cannot
@@ -132,3 +138,29 @@ def nearest_board(fpga, boards=None):
             "no rule4ml board is available to match this FPGA endpoint"
         )
     return best_name
+
+
+def board_chiplet_fields(board, boards=None):
+    """Return the FPGA chiplet fields that follow from one rule4ml board.
+
+    The resources are the capacities of the board. Area and power scale with
+    the LUT count of the board from the reference chiplet.
+    """
+    boards = boards if boards is not None else load_boards()
+    capacities = boards.get(board)
+    if capacities is None:
+        raise UnsupportedEvaluation(
+            f"unknown rule4ml board '{board}'; the boards are {', '.join(boards)}"
+        )
+    luts = int(capacities["max_lut"])
+    scale = luts / REFERENCE_LUTS
+    return {
+        "board": board,
+        "clbs": luts // LUTS_PER_CLB,
+        "brams": int(capacities["max_bram"]),
+        "dsps": int(capacities["max_dsp"]),
+        "luts": luts,
+        "ffs": int(capacities["max_ff"]),
+        "area": REFERENCE_AREA_MM2 * scale,
+        "power": REFERENCE_POWER_W * scale,
+    }

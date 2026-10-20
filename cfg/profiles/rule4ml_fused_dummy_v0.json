@@ -10,7 +10,7 @@
         "relu@sa": {
             "id": "sa_fused_relu_v1",
             "settings": {
-                "latency_ns_per_element": 0.01,
+                "cycles_per_group": 1,
                 "energy_per_element_pj": 0.05
             }
         },
@@ -21,7 +21,7 @@
         "sigmoid@sa": {
             "id": "sa_fused_sigmoid_v1",
             "settings": {
-                "latency_ns_per_element": 0.1,
+                "cycles_per_group": 10,
                 "energy_per_element_pj": 0.5
             }
         },
@@ -32,7 +32,7 @@
         "tanh@sa": {
             "id": "sa_fused_tanh_v1",
             "settings": {
-                "latency_ns_per_element": 0.1,
+                "cycles_per_group": 10,
                 "energy_per_element_pj": 0.5
             }
         },

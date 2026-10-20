@@ -10,8 +10,14 @@ evaluation profile names it with the key ``<type>@sa``, for example
 ``relu@sa``. Its latency and energy come from the evaluator settings:
 
 * ``latency_ns``              latency of one fused operation; default ``0.0``.
-* ``latency_ns_per_element``  latency for each tensor element; default ``0.0``.
+* ``cycles_per_group``        SA cycles for each group of elements, one group
+                              being as many elements as the SA is wide; default
+                              ``0.0``.
 * ``energy_per_element_pj``   energy for each tensor element; default ``0.0``.
+
+The elements are shared equally by the SAs of the GEMM. The latency of the
+group part is the number of groups for one SA, times ``cycles_per_group``,
+divided by the clock of that SA. With several SAs the slowest one counts.
 
 The systolic array gets no area or power for the activation hardware. The
 settings are assumed rates, not hardware characterizations.
@@ -19,6 +25,7 @@ settings are assumed rates, not hardware characterizations.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from system.utils.OperationEvaluator import (
@@ -52,7 +59,7 @@ def fusion_types(profile):
         if fused_evaluator_key(operation_type) in profile.evaluators
     )
 
-_SETTINGS = ("latency_ns", "latency_ns_per_element", "energy_per_element_pj")
+_SETTINGS = ("latency_ns", "cycles_per_group", "energy_per_element_pj")
 
 
 class FusedSaActivationService:
@@ -129,9 +136,10 @@ class SaFusedReluInputAdapter(OperationInputAdapter):
 class SaFusedReluEvaluator(OperationEvaluator):
     """Operation evaluator for an activation fused with the GEMM on its SAs.
 
-    Compute latency is the ``latency_ns`` setting plus the element count times
-    the ``latency_ns_per_element`` setting. Dynamic energy is the element count
-    times the ``energy_per_element_pj`` setting.
+    Compute latency is the ``latency_ns`` setting plus the group latency: the
+    groups of SA width that one SA handles, times the ``cycles_per_group``
+    setting, divided by the SA clock. Dynamic energy is the element count times
+    the ``energy_per_element_pj`` setting.
     """
 
     def __init__(self, operation_type="relu"):
@@ -161,12 +169,16 @@ class SaFusedReluEvaluator(OperationEvaluator):
                 "unsupported fused activation evaluator setting(s): "
                 + ", ".join(unknown)
             )
+        sas = [context.system.core_dict[sa_id] for sa_id in assignment.endpoint_ids]
+        elements_per_sa = math.ceil(evaluator_input.element_count / len(sas))
+        group_latency_ns = max(
+            math.ceil(elements_per_sa / sa.width) / sa.frequency * 1e9 for sa in sas
+        )
         return OperationEstimate(
             operation_id=evaluator_input.operation_id,
             evaluator_id=self.evaluator_id,
             compute_latency_ns=self._setting(settings, "latency_ns")
-            + evaluator_input.element_count
-            * self._setting(settings, "latency_ns_per_element"),
+            + self._setting(settings, "cycles_per_group") * group_latency_ns,
             dynamic_energy_pj=evaluator_input.element_count
             * self._setting(settings, "energy_per_element_pj"),
         )

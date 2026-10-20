@@ -9,19 +9,22 @@
     "Chiplet_2": {
         "chiplet_type": "fpga",
         "tech_node": "7",
-        "area": 10.0,
-        "power": 2.0,
+        "area": 6.65,
+        "power": 1.33,
         "frequency_hz": 300000000,
-        "clbs": 10000,
-        "brams": 200,
-        "dsps": 500,
+        "clbs": 6650,
+        "brams": 280,
+        "dsps": 220,
         "relu_implementation": {
             "clbs_per_lane": 5,
             "brams_per_lane": 0,
             "dsps_per_lane": 0,
             "max_parallel_lanes": 64,
             "energy_per_element_pj": null
-        }
+        },
+        "board": "pynq-z2",
+        "luts": 53200,
+        "ffs": 106400
     },
     "pkg": {
         "HI_pkg_type": "2.5d",

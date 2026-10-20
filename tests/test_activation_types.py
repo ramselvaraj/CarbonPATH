@@ -1,4 +1,5 @@
 import json
+import math
 import random
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ import pandas as pd
 
 from main import build_default_evaluator_registry, evaluate_atlas_graph
 from system.utils import Rule4MlEvaluators
+from system.utils.ChipletSystem import BASE_FREQUENCY, freq_scaling_factors
 from system.utils.AtlasAnnealingMoves import mutate_atlas_design_point
 from system.utils.AtlasGraphAdapter import (
     FPGA_OPERATIONS,
@@ -192,7 +194,7 @@ class ActivationTypeTests(unittest.TestCase):
                 7, "sa", (0,), FUSED_ACTIVATION_POLICY, "local_sram_v1"
             )
 
-    def test_fused_cost_is_proportional_to_the_element_count(self):
+    def test_fused_cost_follows_the_sa_width_clock_and_element_count(self):
         graph = load_atlas_graph(RULE4ML_GRAPH)
         profile = load_evaluation_profile(DUMMY_PROFILE)
         mapping = initial_workload_mapping(
@@ -209,15 +211,17 @@ class ActivationTypeTests(unittest.TestCase):
                 self.cache, self.architecture, graph, profile=profile, mapping=mapping
             )
 
-        rates = {1: (0.01, 0.05), 3: (0.1, 0.5), 5: (0.1, 0.5)}
-        for index, (latency_rate, energy_rate) in rates.items():
+        clock_hz = BASE_FREQUENCY * freq_scaling_factors[7]
+        rates = {1: (1, 0.05), 3: (10, 0.5), 5: (10, 0.5)}
+        for index, (cycles_per_group, energy_rate) in rates.items():
             result = evaluation.results[index]
             self.assertEqual(
                 result.evaluator_id, f"sa_fused_{result.operation_type}_v1"
             )
             self.assertEqual(result.movement.method, "fused")
             self.assertAlmostEqual(
-                result.compute_latency_ns, latency_rate * result.element_count
+                result.compute_latency_ns,
+                cycles_per_group * math.ceil(result.element_count / 64) / clock_hz * 1e9,
             )
             self.assertAlmostEqual(
                 result.compute_energy_pj, energy_rate * result.element_count
@@ -262,24 +266,13 @@ class ActivationTypeTests(unittest.TestCase):
             self.assertTrue(moved.is_fused(3))
             self.assertFalse(moved.is_fused(1))
 
-    def test_rule4ml_profile_uses_the_relu_prediction_for_simple_types(self):
+    def test_rule4ml_profile_rejects_leaky_and_thresholded_relu(self):
         profile = load_evaluation_profile(RULE4ML_PROFILE)
 
-        evaluation, predict = self._evaluate(self.mapping, profile=profile)
-
-        self.assertEqual(
-            [result.evaluator_id for result in evaluation.results[1::2]],
-            [
-                "rule4ml_hybrid_leaky_relu_v1",
-                "rule4ml_hybrid_thresholded_relu_v1",
-                "rule4ml_fpga_sigmoid_v1",
-                "rule4ml_fpga_tanh_v1",
-            ],
-        )
-        self.assertEqual(
-            [call.kwargs["activation"] for call in predict.call_args_list],
-            ["relu", "relu", "sigmoid", "tanh"],
-        )
+        with self.assertRaisesRegex(
+            UnsupportedEvaluation, "rule4ml has no predictor for 'leaky_relu'"
+        ):
+            self._evaluate(self.mapping, profile=profile)
 
     def test_rule4ml_graph_uses_a_rule4ml_evaluator_for_each_activation(self):
         graph = load_atlas_graph(RULE4ML_GRAPH)

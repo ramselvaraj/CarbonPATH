@@ -55,7 +55,7 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 FIXTURE = Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json")
 SOFTMAX_FIXTURE = Path("cfg/examples/atlas/dense_softmax.graph_dump.json")
 MIXED_FIXTURE = Path("cfg/examples/atlas/dense_relu_softmax.graph_dump.json")
-ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
+ARCHITECTURE = Path("tests/fixtures/sa_fpga_architecture_legacy.json")
 PLACEHOLDER_PROFILE = Path("cfg/profiles/placeholder_fpga_ops_v0.json")
 MULTI_SA_PROFILE = Path("cfg/profiles/atlas_multi_sa_fpga_v1.json")
 ONE_SA_FIXTURE = Path("tests/fixtures/dense_relu_funnel_one_sa_pointwise.json")

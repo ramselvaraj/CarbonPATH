@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import random
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from system.utils.AtlasGraphAdapter import (
     gemm_sequence_to_atlas_graph,
     load_atlas_graph,
 )
+from system.utils.ChipletSystem import BASE_FREQUENCY, freq_scaling_factors
 from system.utils.AtlasObjective import RawWeightedSumObjective
 from system.utils.DesignPointFile import design_point_document, parse_design_point
 from system.utils.EvaluationProfile import load_evaluation_profile
@@ -204,6 +206,33 @@ class FusedActivationTests(unittest.TestCase):
         self.assertAlmostEqual(
             charged.compute_energy_pj, free.compute_energy_pj + 0.5 * elements
         )
+
+    def test_fused_relu_latency_follows_the_sa_width_and_clock(self):
+        profile = self.profile.with_evaluator_setting(
+            "relu@sa", "cycles_per_group", 2
+        )
+        mapping = _fuse_all(self.unfused, "local_sram_v1")
+        clock_hz = BASE_FREQUENCY * freq_scaling_factors[7]
+
+        for width, buffer in ((64, 256), (128, 1024)):
+            with self.subTest(width=width):
+                architecture = copy.deepcopy(self.architecture)
+                architecture["Chiplet_1"]["sys_array_size"] = f"{width}x{width}"
+                architecture["Chiplet_1"]["sram_buf"] = buffer
+                free = self._evaluate(mapping, architecture=architecture)
+                charged = self._evaluate(
+                    mapping, architecture=architecture, profile=profile
+                )
+
+                expected = sum(
+                    2 * math.ceil(free.results[index].element_count / width)
+                    / clock_hz * 1e9
+                    for index in RELU_INDEXES
+                )
+                self.assertGreater(expected, 0.0)
+                self.assertAlmostEqual(
+                    charged.latency_ns - free.latency_ns, expected
+                )
 
     def test_profile_without_a_fused_evaluator_is_unsupported(self):
         with self.assertRaisesRegex(UnsupportedEvaluation, "relu@sa"):

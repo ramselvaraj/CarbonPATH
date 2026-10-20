@@ -13,9 +13,7 @@
     "handoff_movement": 1.0,
     "relu_fusion": 1.0,
     "fpga_count": 1.0,
-    "fpga_clbs": 1.0,
-    "fpga_brams": 1.0,
-    "fpga_dsps": 1.0,
+    "fpga_board": 1.0,
     "fpga_frequency": 1.0,
     "fpga_relu": 1.0,
     "mem_type": 1.0,
@@ -33,9 +31,7 @@
   },
   "fpga": {
     "count": [1],
-    "clbs": [8000, 10000, 16000, 32000],
-    "brams": [100, 200, 400],
-    "dsps": [250, 500, 1000],
+    "boards": ["pynq-z2", "zcu102", "alveo-u200", "alveo-u250"],
     "frequency_hz": [200000000, 300000000, 400000000],
     "relu_implementation": [
       {

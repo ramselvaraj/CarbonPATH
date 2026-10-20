@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from system.utils.Rule4MlBoards import board_chiplet_fields, load_boards
+
 
 @dataclass(frozen=True)
 class FpgaReluImplementation:
@@ -111,6 +113,7 @@ class FpgaChiplet:
     softmax_implementation: FpgaSoftmaxImplementation = field(
         default_factory=FpgaSoftmaxImplementation
     )
+    board: str | None = None
 
     @property
     def chiplet_type(self):
@@ -131,6 +134,7 @@ class FpgaChiplet:
             "dsps",
             "luts",
             "ffs",
+            "board",
             "relu_implementation",
             "softmax_implementation",
         }
@@ -165,6 +169,21 @@ class FpgaChiplet:
                 )
             optional_counts[field] = count
 
+        board = value.get("board")
+        if board is not None:
+            boards = load_boards()
+            if board not in boards:
+                raise ValueError(
+                    f"{name}.board must be one of: {', '.join(boards)}"
+                )
+            expected = board_chiplet_fields(board, boards)
+            for field in ("clbs", "brams", "dsps"):
+                if counts[field] != expected[field]:
+                    raise ValueError(
+                        f"{name}.{field} is {counts[field]} but board '{board}' "
+                        f"has {expected[field]}"
+                    )
+
         implementation = FpgaReluImplementation.from_dict(
             value.get("relu_implementation", {})
         )
@@ -186,4 +205,5 @@ class FpgaChiplet:
             softmax_implementation=FpgaSoftmaxImplementation.from_dict(
                 value.get("softmax_implementation", {})
             ),
+            board=board,
         )

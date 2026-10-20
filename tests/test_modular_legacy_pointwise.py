@@ -18,7 +18,7 @@ from system.utils.IntermediateMemoryPolicy import INTERMEDIATE_POLICIES
 from system.utils.SimulationCache import SimulationCache
 
 
-ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
+ARCHITECTURE = Path("tests/fixtures/sa_fpga_architecture_legacy.json")
 REFERENCE = Path("tests/fixtures/original_carbonpath_two_gemm_pointwise.json")
 MULTI_SA_REFERENCE = Path("tests/fixtures/original_carbonpath_two_sa_pointwise.json")
 CACHE_COLUMNS = [
