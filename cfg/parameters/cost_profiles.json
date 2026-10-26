@@ -7,7 +7,7 @@
     "embc_coeff": 0,
     "opec_coeff": 0
   },
-    "t2": {
+  "t2": {
     "energy_coff": 0.8,
     "perf_coeff": 0.1,
     "area_coeff": 0.2,
@@ -28,6 +28,14 @@
     "perf_coeff": 0.1,
     "area_coeff": 0.6,
     "cost_coeff": 0.1,
+    "embc_coeff": 0,
+    "opec_coeff": 0
+  },
+  "t5": {
+    "energy_coff": 1,
+    "perf_coeff": 1,
+    "area_coeff": 1,
+    "cost_coeff": 0,
     "embc_coeff": 0,
     "opec_coeff": 0
   }

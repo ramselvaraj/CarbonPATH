@@ -146,6 +146,9 @@ class RawWeightedSumObjective(AtlasObjective):
         }
 
 
+# t5 weighs latency, energy and area equally, with no dollar cost and no carbon.
+CALIBRATED_PROFILES = ("t1", "t2", "t3", "t4", "t5")
+
 _CALIBRATED_METRICS = {
     "energy": ("total_energy_pj", "avg_energy"),
     "area": ("area_mm2", "avg_area"),
@@ -171,7 +174,7 @@ class CalibratedCarbonPathObjective(AtlasObjective):
     NORMALIZATION_MODES = ("avg", "max", "max_minus_min", "mean_std", "min_median")
 
     def __init__(self, profile_name, coefficients, calibration, normalization_mode):
-        if profile_name not in ("t1", "t2", "t3", "t4"):
+        if profile_name not in CALIBRATED_PROFILES:
             raise UnsupportedEvaluation(f"unknown CarbonPATH objective '{profile_name}'")
         if normalization_mode not in self.NORMALIZATION_MODES:
             raise UnsupportedEvaluation(
@@ -291,7 +294,7 @@ def build_atlas_objective(
     objective_id = objective_id or config.get("default")
     if not isinstance(objective_id, str) or not objective_id:
         raise UnsupportedEvaluation("atlas objective config must name a default")
-    if objective_id in ("t1", "t2", "t3", "t4"):
+    if objective_id in CALIBRATED_PROFILES:
         calibration = calibration or config.get("calibration")
         normalization_mode = normalization_mode or config.get("normalization_mode")
         if not isinstance(calibration, dict):
