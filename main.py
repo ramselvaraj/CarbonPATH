@@ -25,6 +25,7 @@ from chiplet.n_utils import get_area_power, read_json_input_params, calculate_sy
 from chiplet.n_disagg import ChipletGenerator, PackageGenerator, WLMappingGenerator
 from chiplet.carbon_model.ECO_chip import find_carbon
 
+from system.utils.ChipletResourceCheck import check_chiplet_resources, chiplet_totals
 from system.utils.GEMMWorkload import GEMMWorkload
 from system.utils.Scheduler import CHIP2CHIP_TRANSFER, Scheduler
 from system.utils.ChipletSystem import ChipletSystem
@@ -510,6 +511,7 @@ class AtlasOperationResult:
     reduction_latency_ns: float = 0.0
     reduction_communication_energy_pj: float = 0.0
     parameter_load: object = None
+    chiplet_use: tuple = ()
 
     @property
     def parameter_load_latency_ns(self):
@@ -554,6 +556,15 @@ class AtlasEvaluation:
             for result in self.results
             if result.movement is not None
         ) + sum(result.parameter_load_energy_pj for result in self.results)
+
+    @property
+    def chiplet_resources(self):
+        """Total resources of each FPGA chiplet: ``{endpoint_id: {label: count}}``."""
+        return chiplet_totals(
+            (result.operation_id, use)
+            for result in self.results
+            for use in result.chiplet_use
+        )
 
     def total_energy_pj(self, system_power_w):
         return (
@@ -765,8 +776,19 @@ def evaluate_atlas_graph(
                     estimate.reduction_communication_energy_pj
                 ),
                 parameter_load=estimate.parameter_load,
+                chiplet_use=estimate.chiplet_use,
             )
         )
+
+    # The operations of one chiplet must fit it together, not only one by one.
+    check_chiplet_resources(
+        system,
+        [
+            (result.operation_id, use)
+            for result in results
+            for use in result.chiplet_use
+        ],
+    )
 
     return AtlasEvaluation(
         graph=graph,

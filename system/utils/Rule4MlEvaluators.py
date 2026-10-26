@@ -29,6 +29,7 @@ import re
 
 from dataclasses import dataclass
 
+from system.utils.ChipletResourceCheck import ChipletUse
 from system.utils.OperationEvaluator import (
     OperationEstimate,
     OperationEvaluator,
@@ -340,6 +341,13 @@ class Rule4MlActivationEvaluator(OperationEvaluator):
             evaluator_id=self.evaluator_id,
             compute_latency_ns=compute_latency_ns,
             dynamic_energy_pj=dynamic_energy_pj,
+            chiplet_use=(
+                ChipletUse(
+                    endpoint_id=assignment.endpoint_id,
+                    kernel=dict(prediction["resources"]),
+                    buffer_blocks=buffer.blocks,
+                ),
+            ),
         )
 
 

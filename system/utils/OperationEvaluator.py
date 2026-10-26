@@ -32,6 +32,9 @@ class OperationEstimate:
     reduction_communication_energy_pj: float = 0.0
     # A ParameterLoad when the kernel loads constants from DRAM before it starts.
     parameter_load: object = None
+    # A ChipletUse for each FPGA chiplet that the kernel occupies; the
+    # per-chiplet resource check adds them up. Empty when not reported.
+    chiplet_use: tuple = ()
 
 
 @dataclass

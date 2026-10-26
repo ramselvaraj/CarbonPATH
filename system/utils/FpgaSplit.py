@@ -14,7 +14,8 @@ can run on a set of FPGA chiplets in the same way. The cut is by rows:
   dynamic energy is the sum.
 * Each chiplet needs all the constants of the kernel (scale, bias, tables), so
   every chiplet stores and loads its own copy. The BRAM, the resource check, and
-  the input buffer are for each chiplet, with the rows of that chiplet.
+  the input buffer are for each chiplet, with the rows of that chiplet. Each
+  chiplet reports its own share (``chiplet_use``) for the per-chiplet check.
 
 The tensor movement service uses the same row blocks to route the rows of a
 GEMM output to the chiplet that owns them, and the rows back to the SAs.
@@ -81,4 +82,5 @@ def estimate_row_split(estimate_one, operation, access_plan, assignment, context
             if loads
             else None
         ),
+        chiplet_use=tuple(use for item in estimates for use in item.chiplet_use),
     )

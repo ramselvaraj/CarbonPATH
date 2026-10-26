@@ -98,6 +98,7 @@ class Rule4MlHybridReluEvaluator(Rule4MlActivationEvaluator):
             evaluator_id=self.evaluator_id,
             compute_latency_ns=latency_ns,
             dynamic_energy_pj=evaluator_input.element_count * per_element,
+            chiplet_use=estimate.chiplet_use,
         )
 
 
@@ -117,6 +118,7 @@ class Rule4MlHybridSoftmaxEvaluator(Rule4MlActivationEvaluator):
             compute_latency_ns=estimate.compute_latency_ns,
             dynamic_energy_pj=evaluator_input.element_count
             * fpga.softmax_implementation.energy_per_element_pj,
+            chiplet_use=estimate.chiplet_use,
         )
 
 
