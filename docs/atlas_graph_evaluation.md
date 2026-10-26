@@ -258,6 +258,12 @@ supported for ATLAS graphs.
   `fpga_set` (add or remove a chiplet from one operation). The full search space lists `fpga.count: [1, 2]`; the placeholder and single
   spaces list `[1]`, so the count move is off there. A split needs the profile with `distributed_activation_boundary_v2`;
   with an older movement policy the split points are rejected.
+- The split is a policy: the profile field `fpga_split_policy` (`system/utils/FpgaSplitPolicy.py`) owns how the rows divide,
+  how the chiplet results join, and how the constant loads combine. `row_split_v1` is the default and gives the numbers
+  above. `row_split_parallel_loads_v1` lets each chiplet load its constants over its own DRAM path, so the longest load
+  counts and not the sum (an assumption, not measured). A profile without the field keeps its fingerprint. The search
+  space field `fpga.new_chiplet` names the policy for the chiplet that `fpga_count` adds: `copy_existing_v1` (default) or
+  `from_search_space_v1` (`system/utils/FpgaNewChiplet.py`).
 - The per-chiplet resource check adds up the kernels of all operations on one FPGA chiplet and counts the input
   buffer once (`system/utils/ChipletResourceCheck.py`). See `docs/rule4ml_assumptions.md`.
 - ReLU and Softmax are the only non-GEMM operation types.
