@@ -1,0 +1,161 @@
+[
+  {
+    "index": 1,
+    "name": "input_layer",
+    "class": "Input",
+    "inputs": [
+      {
+        "name": "input",
+        "shape": null,
+        "precision": "?"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<9,3,RND,WRAP,0>"
+    },
+    "weights": [],
+    "attrs": {
+      "name": "input_layer",
+      "class_name": "InputLayer",
+      "module": "keras.src.layers.core.input_layer",
+      "input_keras_tensor_names": [],
+      "input_shape": [
+        8,
+        16
+      ],
+      "output_keras_tensor_names": [
+        "keras_tensor"
+      ],
+      "inputs": [],
+      "index": 1,
+      "trace": false,
+      "bit_exact_transformed": true,
+      "_result_t_propagated": true,
+      "reuse_factor": 1,
+      "target_cycles": null
+    }
+  },
+  {
+    "index": 2,
+    "name": "gemm_stem",
+    "class": "Gemm",
+    "inputs": [
+      {
+        "name": "input_layer",
+        "shape": [
+          8,
+          16
+        ],
+        "precision": "fixed<9,3,RND,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<13,6,TRN,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "weight10",
+        "shape": [
+          16,
+          16
+        ],
+        "precision": "fixed<7,1,TRN,WRAP,0>",
+        "nzeros": "2"
+      },
+      {
+        "name": "bias10",
+        "shape": [
+          16
+        ],
+        "precision": "ufixed<2,32,TRN,WRAP,0>",
+        "nzeros": "16"
+      }
+    ],
+    "attrs": {
+      "n_in": 16,
+      "n_out": 16,
+      "n_patches": 8,
+      "gemm_m": 8,
+      "weights_in_core": true,
+      "weight_quantizer": null,
+      "bias_quantizer": null,
+      "_original_type": "Dense",
+      "_gemm_output_shape": [
+        8,
+        16
+      ],
+      "has_bias": false,
+      "strategy": "gemm",
+      "reuse_factor": 1,
+      "parallelization_factor": 1,
+      "target_cycles": null,
+      "sparse": false,
+      "second_operand_row_major": false,
+      "im2col_tile_rows": null,
+      "index": 10,
+      "trace": false,
+      "n_inplace": 1,
+      "_weights_transposed": true,
+      "_weights_transposed_for_gemm": true,
+      "config_cpp": "struct config10 : nnet::gemm_config {\n    static const unsigned n_in = 16;\n    static const unsigned n_out = 16;\n    static const unsigned n_patches = 8;\n    static const unsigned gemm_m = 8;\n    static const unsigned gemm_k = 16;\n    static const unsigned gemm_n = 16;\n    static const unsigned gemm_ip_id = 10;\n    static const bool transpose_weights = true;\n    // Microarchitecture knobs consumed by the generic (behavioral-HLS) GEMM core:\n    // row-loop pipeline II and the multiplier ALLOCATION cap (mirrors nnet_dense_*).\n    static const unsigned reuse_factor = 1;\n    static const unsigned multiplier_limit = 256;\n    typedef gemm_stem_weight_t weight_t;\n    typedef gemm_stem_bias_t bias_t;\n    typedef gemm_stem_accum_t accum_t;\n    template<class x_T, class y_T>\n    using product = nnet::product::mult<x_T, y_T>;\n    static const bool weights_row_major = false;\n    typedef nnet::array<weight_t, gemm_k> weight_beat_t;\n    static weight_beat_t* gemm_weight_beats() { return weight10_gemm_cols; }\n    typedef weight_beat_t weight_col_t;\n    static weight_col_t* gemm_weight_cols() { return weight10_gemm_cols; }\n    static bias_t* gemm_bias() { return bias10; }\n};\n",
+      "include_header": [
+        "nnet_utils/nnet_gemm_stream.h",
+        "nnet_utils/nnet_gemm_ip.h"
+      ],
+      "function_cpp": "nnet::gemm_stream_const_weights<input_layer_t, layer10_t, config10>(input_layer, layer10_out);"
+    }
+  },
+  {
+    "index": 3,
+    "name": "norm",
+    "class": "LayerNormalization",
+    "inputs": [
+      {
+        "name": "stem",
+        "shape": [
+          8,
+          16
+        ],
+        "precision": "fixed<13,6,TRN,WRAP,0>"
+      }
+    ],
+    "output": {
+      "shape": [
+        8,
+        16
+      ],
+      "precision": "fixed<8,3,RND,WRAP,0>"
+    },
+    "weights": [
+      {
+        "name": "scale3",
+        "shape": [
+          16
+        ],
+        "precision": "fixed<8,3,TRN,WRAP,0>"
+      },
+      {
+        "name": "bias3",
+        "shape": [
+          16
+        ],
+        "precision": "fixed<8,3,TRN,WRAP,0>"
+      }
+    ],
+    "attrs": {
+      "n_in": 128,
+      "seq_len": 8,
+      "axis": 2,
+      "table_size": 1024,
+      "reuse_factor": 1
+    }
+  }
+]

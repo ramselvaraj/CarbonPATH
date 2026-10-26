@@ -34,8 +34,12 @@ from system.utils.OperationEvaluator import (
     OperationEvaluator,
     OperationInputAdapter,
 )
-from system.utils.Rule4MlBoards import nearest_board
-from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
+from system.utils.Rule4MlBoards import fpga_resource_vector, nearest_board
+from system.utils.Rule4MlInputBuffer import VALUE_BITS, input_buffer, precision_bits
+from system.utils.UnsupportedEvaluation import (
+    ResourceExceeded,
+    UnsupportedEvaluation,
+)
 
 
 _SUPPORTED_SETTINGS = {
@@ -48,29 +52,33 @@ _SUPPORTED_SETTINGS = {
     "latency_metric",
     "energy_per_element_pj",
 }
-_DEFAULT_PRECISION = "ap_fixed<16, 6>"
+_DEFAULT_PRECISION = "ap_fixed<8, 3>"
 _DEFAULT_HLS4ML_VERSION = "1.1.0"
 _DEFAULT_VIVADO_VERSION = "2024.2"
 _RESOURCE_LABELS = ("BRAM", "DSP", "FF", "LUT")
 
 
 _ATLAS_FIXED = re.compile(r"^\s*u?fixed\s*<\s*(\d+)\s*,\s*(-?\d+)\s*[,>]")
+_AP_FIXED = re.compile(r"^\s*ap_fixed\s*<\s*(\d+)\s*,\s*(-?\d+)\s*>")
+_INT8 = re.compile(r"^\s*u?int\s*<?\s*8\s*>?\s*$")
 
 
 def rule4ml_precision(precision):
-    """Return an ``ap_fixed<a, b>`` string for an ATLAS or rule4ml precision.
+    """Return the ``ap_fixed<8, I>`` string of one value.
 
-    ATLAS writes ``fixed<W,I,RND,WRAP,0>``; rule4ml accepts only
-    ``ap_fixed<W, I>``. Unknown formats fall back to the default precision.
+    Every value in the model is 8-bit fixed point. A declared 8-bit ATLAS
+    ``fixed<8,I,...>``, ``ap_fixed<8, I>``, or ``int8`` keeps its integer bits
+    (``int8`` has 8). Any other declared width, and a missing or unknown one,
+    is read as the default ``ap_fixed<8, 3>``: the graph is quantized to 8 bits.
     """
     if not isinstance(precision, str):
         return _DEFAULT_PRECISION
-    if precision.strip().startswith("ap_fixed<"):
-        return precision.strip()
-    match = _ATLAS_FIXED.match(precision)
-    if match is None:
+    if _INT8.match(precision):
+        return f"ap_fixed<{VALUE_BITS}, {VALUE_BITS}>"
+    match = _ATLAS_FIXED.match(precision) or _AP_FIXED.match(precision)
+    if match is None or int(match.group(1)) != VALUE_BITS:
         return _DEFAULT_PRECISION
-    return f"ap_fixed<{match.group(1)}, {match.group(2)}>"
+    return f"ap_fixed<{VALUE_BITS}, {match.group(2)}>"
 
 #: The operation types that rule4ml has a trained predictor for.
 RULE4ML_SUPPORTED_OPERATIONS = ("relu", "sigmoid", "tanh", "softmax")
@@ -176,6 +184,27 @@ def predict_activation(
     }
     _PREDICTIONS[key] = result
     return result
+
+
+def check_resources_fit(operation_id, fpga, resources):
+    """Reject a prediction that needs more than the FPGA endpoint offers.
+
+    ``resources`` maps a rule4ml label (BRAM, DSP, FF, LUT) to the predicted
+    count. The limit is the resource vector of the FPGA in the architecture,
+    not the capacity of the rule4ml board, so a small FPGA rejects what a large
+    board would hold.
+    """
+    available = fpga_resource_vector(fpga)
+    exceeded = [
+        f"{label} {used:.0f} > {available[label.lower()]}"
+        for label, used in resources.items()
+        if label.lower() in available and used > available[label.lower()]
+    ]
+    if exceeded:
+        raise ResourceExceeded(
+            f"{operation_id}: the predicted resources exceed FPGA endpoint "
+            f"{fpga.id} ({', '.join(exceeded)})"
+        )
 
 
 @dataclass(frozen=True)
@@ -288,13 +317,21 @@ class Rule4MlActivationEvaluator(OperationEvaluator):
             hls4ml_version=settings.get("hls4ml_version", _DEFAULT_HLS4ML_VERSION),
             vivado_version=settings.get("vivado_version", _DEFAULT_VIVADO_VERSION),
         )
+        buffer = input_buffer(
+            evaluator_input.element_count,
+            precision_bits(precision),
+            fpga.input_buffer_blocks,
+        )
+        resources = dict(prediction["resources"])
+        resources["BRAM"] = resources.get("BRAM", 0.0) + buffer.blocks
+        check_resources_fit(evaluator_input.operation_id, fpga, resources)
         cycles = prediction[latency_metric]
         if cycles is None:
             raise UnsupportedEvaluation(
                 f"rule4ml has no {latency_metric} estimate for "
                 f"'{evaluator_input.operation_id}'"
             )
-        compute_latency_ns = cycles / fpga.frequency_hz * 1e9
+        compute_latency_ns = (cycles + buffer.read_cycles) / fpga.frequency_hz * 1e9
         dynamic_energy_pj = evaluator_input.element_count * float(
             settings.get("energy_per_element_pj", 0.0)
         )

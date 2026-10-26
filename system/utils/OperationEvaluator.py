@@ -30,6 +30,8 @@ class OperationEstimate:
     tile_mappings: tuple = ()
     reduction_latency_ns: float = 0.0
     reduction_communication_energy_pj: float = 0.0
+    # A ParameterLoad when the kernel loads constants from DRAM before it starts.
+    parameter_load: object = None
 
 
 @dataclass
@@ -41,6 +43,9 @@ class EvaluationContext:
     prepared_operation: object = None
     activation_from_dram: bool = True
     output_to_dram: bool = True
+    # Time the endpoint is idle before this operation, available to hide a
+    # parameter load. The executor sets it from the previous operation.
+    prefetch_slack_ns: float = 0.0
 
 
 class OperationInputAdapter:
@@ -96,6 +101,15 @@ class EvaluatorBinding:
         return self.evaluator.operation_type
 
     def estimate(self, operation, access_plan, assignment, context):
+        if assignment.endpoint_kind == "fpga" and len(assignment.endpoint_ids) > 1:
+            from system.utils.FpgaSplit import estimate_row_split
+
+            return estimate_row_split(
+                self._estimate_one, operation, access_plan, assignment, context
+            )
+        return self._estimate_one(operation, access_plan, assignment, context)
+
+    def _estimate_one(self, operation, access_plan, assignment, context):
         evaluator_input = self.input_adapter.build_input(operation, access_plan)
         return self.evaluator.evaluate(evaluator_input, assignment, context)
 

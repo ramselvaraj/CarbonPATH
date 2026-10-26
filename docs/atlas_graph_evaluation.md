@@ -254,5 +254,15 @@ supported for ATLAS graphs.
 - The HLS ReLU and Softmax evaluators are placeholders, not measured hardware
   models.
 - Transfers and computation are serialized; no contention or overlap.
+- `LayerNormalization` runs on the FPGA with `fpga_layernorm_v1` (`system/utils/FpgaLayerNorm.py`). rule4ml has no
+  LayerNorm predictor, so the latency comes from the loop structure of the hls4ml kernel: one cycle for each
+  dependent operation, `(seq_len - 1) * reuse_factor + 2 * ceil(log2(dim)) + 11` cycles. It is not validated against
+  a synthesis report. It predicts no logic resources. It charges the input buffer of the FPGA (read delay and BRAM)
+  and the parameters (scale, bias, and the rsqrt table, 8 bits each): their BRAM counts against the FPGA, and with
+  `parameter_source: "dram"` they load over DRAM -> systolic array -> link -> FPGA
+  (`system/utils/ParameterLoad.py`). The compute time of the previous operation, when it runs on another endpoint,
+  hides the load: `exposed = max(0, load - previous compute)`. The energy is always paid. `"bitstream"` (the default) has no load.
+  The profiles `atlas_modular_layernorm_v1` and `rule4ml_hybrid_layernorm_v1` name it; the
+  older profiles are unchanged because their fingerprints are pinned.
 - ATLAS precision metadata is preserved but ignored in cost; every tensor is one
   `int8` byte per element.

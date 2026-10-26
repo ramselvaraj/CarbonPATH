@@ -30,6 +30,7 @@ ONE_OPTION_MOVES = (
     "gemm_sa_set",
     "handoff_movement",
     "fpga_count",
+    "fpga_set",
     "transfer_model",
 )
 
@@ -125,6 +126,39 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
             for name, value in expected.items():
                 self.assertEqual(fpga[name], value)
             FpgaChiplet.from_dict("Chiplet_2", fpga)
+
+    def test_fpga_input_buffer_move_sets_an_option_from_the_search_space(self):
+        params = copy.deepcopy(self.search_space)
+        params["move_weights"] = {"fpga_input_buffer": 1.0}
+
+        for seed in range(10):
+            moved, _, move = mutate_atlas_design_point(
+                self.architecture,
+                self._mapping(self.architecture),
+                params,
+                rng=random.Random(seed),
+            )
+
+            self.assertEqual(move, "fpga_input_buffer")
+            self.assertIn(
+                moved["Chiplet_2"]["input_buffer_blocks"],
+                params["fpga"]["input_buffer_blocks"],
+            )
+            FpgaChiplet.from_dict("Chiplet_2", moved["Chiplet_2"])
+
+    def test_input_buffer_move_is_absent_without_options(self):
+        params = copy.deepcopy(self.search_space)
+        del params["fpga"]["input_buffer_blocks"]
+        params["move_weights"] = {"fpga_input_buffer": 1.0, "sa_array": 1.0}
+
+        for seed in range(10):
+            _, _, move = mutate_atlas_design_point(
+                self.architecture,
+                self._mapping(self.architecture),
+                params,
+                rng=random.Random(seed),
+            )
+            self.assertEqual(move, "sa_array")
 
     def test_board_area_and_power_scale_with_the_luts(self):
         boards = load_boards()
@@ -263,19 +297,6 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         params["skip_moves_without_alternative"] = False
 
         with self.assertRaisesRegex(UnsupportedEvaluation, "no alternative"):
-            mutate_atlas_design_point(
-                self.architecture,
-                self._mapping(self.architecture),
-                params,
-                rng=random.Random(1),
-            )
-
-    def test_a_second_fpga_count_option_is_reported_as_unsupported(self):
-        params = copy.deepcopy(self.search_space)
-        params["fpga"]["count"] = [1, 2]
-        params["move_weights"] = {"fpga_count": 1.0}
-
-        with self.assertRaisesRegex(UnsupportedEvaluation, "one option now"):
             mutate_atlas_design_point(
                 self.architecture,
                 self._mapping(self.architecture),

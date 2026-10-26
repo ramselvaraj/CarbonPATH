@@ -13,7 +13,7 @@ are validated later by the selected evaluator's input adapter.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -29,7 +29,7 @@ TABLE_ACTIVATIONS = ("sigmoid", "tanh")
 #: Elementwise activations that can be fused with the GEMM directly before them.
 FUSABLE_ACTIVATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS
 #: Every operation type that an FPGA endpoint runs.
-FPGA_OPERATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + ("softmax",)
+FPGA_OPERATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + ("softmax", "layernorm")
 SUPPORTED_OPERATION_TYPES = ("gemm",) + FPGA_OPERATIONS
 
 # ATLAS node class -> ATLAS ``activation`` attribute -> operation type.
@@ -43,6 +43,14 @@ _ACTIVATION_TYPES = {
 _GENERIC_STEMS = {"graph_dump", "graph", "dump"}
 _MISSING = object()
 _EMPTY_MAPPING = MappingProxyType({})
+
+
+def _thaw(value):
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_thaw(item) for item in value]
+    return value
 
 
 def _deep_freeze(value):
@@ -170,6 +178,22 @@ class AtlasNodeView:
             )
         return _tensor_spec(weights[index])
 
+    def with_rows(self, rows):
+        """A view of the same node on ``rows`` rows of its rank-2 tensors.
+
+        Weights keep their shape: a row slice of an operation uses all of its
+        constants.
+        """
+        node = _thaw(self._node)
+        for tensor in (*(node.get("inputs") or ()), node.get("output")):
+            shape = tensor.get("shape") if isinstance(tensor, dict) else None
+            if not isinstance(shape, list) or len(shape) != 2:
+                raise UnsupportedEvaluation(
+                    f"{self.name}: a row slice needs rank-2 tensors"
+                )
+            shape[0] = rows
+        return AtlasNodeView(node)
+
     @property
     def reference_name(self):
         """Name other nodes use to consume this node's output.
@@ -206,6 +230,32 @@ class AtlasOperation:
     @property
     def element_count(self):
         return self.output_tensor.element_count
+
+    def with_rows(self, rows):
+        """The same operation on ``rows`` rows of its rank-2 tensors.
+
+        Used to evaluate the share of one FPGA chiplet when an operation is
+        split by rows over several chiplets.
+        """
+        if self.gemm_shape is not None:
+            raise UnsupportedEvaluation(
+                f"{self.operation_id}: only an FPGA operation splits by rows"
+            )
+        for tensor in (self.input_tensor, self.output_tensor):
+            if len(tensor.shape) != 2:
+                raise UnsupportedEvaluation(
+                    f"{self.operation_id}: a row split needs rank-2 tensors"
+                )
+        return replace(
+            self,
+            input_tensor=replace(
+                self.input_tensor, shape=(rows, self.input_tensor.shape[1])
+            ),
+            output_tensor=replace(
+                self.output_tensor, shape=(rows, self.output_tensor.shape[1])
+            ),
+            source=self.source.with_rows(rows),
+        )
 
 
 @dataclass(frozen=True)
@@ -304,6 +354,11 @@ def parse_softmax_node(node_view):
     return _parse_elementwise_node(node_view, operation_id, "softmax")
 
 
+def parse_layernorm_node(node_view):
+    operation_id = _require_name(node_view)
+    return _parse_elementwise_node(node_view, operation_id, "layernorm")
+
+
 def _parse_elementwise_node(node_view, operation_id, operation_type):
     if len(node_view.inputs) != 1:
         raise UnsupportedEvaluation(
@@ -336,6 +391,8 @@ def _parse_operation(node_view):
         return parse_activation_node(node_view)
     if node_class == "Softmax":
         return parse_softmax_node(node_view)
+    if node_class == "LayerNormalization":
+        return parse_layernorm_node(node_view)
     raise UnsupportedEvaluation(
         f"unsupported ATLAS node class '{node_class}' ({node_view.name})"
     )

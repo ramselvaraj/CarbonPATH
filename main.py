@@ -74,6 +74,7 @@ from system.utils.DesignPointFile import (
 )
 from system.utils.FpgaActivationMovement import register_fpga_activation_movement
 from system.utils.FusedActivation import fusion_types, register_fused_activation
+from system.utils.FpgaLayerNorm import register_layernorm_evaluators
 from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
 from system.utils.TensorMovement import MovementRequest, build_movement_service
 from system.utils.TransferEstimator import build_transfer_cost_model
@@ -471,6 +472,7 @@ def build_default_evaluator_registry():
     )
     register_placeholder_policies(registry)
     register_rule4ml_evaluators(registry)
+    register_layernorm_evaluators(registry)
     register_fused_activation(registry)
     return registry
 
@@ -507,6 +509,18 @@ class AtlasOperationResult:
     tile_mappings: tuple = ()
     reduction_latency_ns: float = 0.0
     reduction_communication_energy_pj: float = 0.0
+    parameter_load: object = None
+
+    @property
+    def parameter_load_latency_ns(self):
+        """Part of the parameter load that the operation waits for."""
+        load = self.parameter_load
+        return load.exposed_latency_ns if load is not None else 0.0
+
+    @property
+    def parameter_load_energy_pj(self):
+        load = self.parameter_load
+        return load.energy_pj if load is not None else 0.0
 
     @property
     def endpoint_id(self):
@@ -524,7 +538,7 @@ class AtlasEvaluation:
     def latency_ns(self):
         total = 0.0
         for result in self.results:
-            total += result.compute_latency_ns
+            total += result.compute_latency_ns + result.parameter_load_latency_ns
             if result.movement is not None:
                 total += result.movement.charged_latency_ns
         return total
@@ -539,7 +553,7 @@ class AtlasEvaluation:
             result.movement.charged_energy_pj
             for result in self.results
             if result.movement is not None
-        )
+        ) + sum(result.parameter_load_energy_pj for result in self.results)
 
     def total_energy_pj(self, system_power_w):
         return (
@@ -710,6 +724,15 @@ def evaluate_atlas_graph(
         context.prepared_operation = item["prepared"]
         context.activation_from_dram = access_plan.activation_from_dram
         context.output_to_dram = access_plan.output_to_dram
+        # The endpoint is idle while the previous operation computes on another
+        # endpoint. That time can hide a parameter load.
+        previous = results[-1] if results else None
+        context.prefetch_slack_ns = (
+            previous.compute_latency_ns
+            if previous is not None
+            and previous.endpoint_ids != assignment.endpoint_ids
+            else 0.0
+        )
         estimate = item["binding"].estimate(
             operation, access_plan, assignment, context
         )
@@ -735,6 +758,7 @@ def evaluate_atlas_graph(
                 reduction_communication_energy_pj=(
                     estimate.reduction_communication_energy_pj
                 ),
+                parameter_load=estimate.parameter_load,
             )
         )
 

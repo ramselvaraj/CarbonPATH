@@ -8,3 +8,11 @@ not a partial result.
 
 class UnsupportedEvaluation(Exception):
     """Raised when an evaluation uses a capability CarbonPATH does not model."""
+
+
+class ResourceExceeded(UnsupportedEvaluation):
+    """Raised when a predicted design point needs more than the FPGA offers.
+
+    It is an unsupported evaluation, so the annealer rejects the design point
+    as an evaluation error instead of scoring it.
+    """

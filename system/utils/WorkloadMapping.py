@@ -249,7 +249,8 @@ class WorkloadMapping:
 
         ``endpoint_id_map`` maps each old endpoint ID that still exists to its
         new ID. A removed endpoint leaves each operation. Each new SA joins
-        every GEMM. An operation that loses its last endpoint is invalid.
+        every GEMM. A new FPGA chiplet joins no operation; the ``fpga_set`` move
+        places it. An operation that loses its last endpoint is invalid.
         """
         operations = []
         for index, operation in enumerate(self.operations):

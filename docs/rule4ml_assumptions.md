@@ -1,6 +1,6 @@
 # Rule4ML Assumptions
 
-Living document. Updated 2026-10-20.
+Living document. Updated 2026-10-25.
 
 Sources, in order of priority:
 
@@ -102,6 +102,7 @@ Consequences:
 - Every input value is available at once for dense and activation layers. There is no streaming in that data.
 - Cycles cover the compute inside the kernel. They do not cover moving data to or from the FPGA.
 - Results are tool estimates, not measurements.
+- The storage that holds the input while it arrives is outside the kernel. Rule4ML does not count it. See "Input buffer".
 
 ## Pragmas and parallelism
 
@@ -267,6 +268,59 @@ From the 2024 paper and the README:
 A lead for us: `datasets/analysis/` in the Rule4ML repo has scripts for single-operation data
 (`rank_single_op.py`, `score_op.py`, `op_depth_grid.py`). They may help explain the single-activation predictions. Not checked.
 
+## Input buffer (CarbonPATH addition)
+
+Added 2026-10-25. Code: `system/utils/Rule4MlInputBuffer.py`, called from `Rule4MlActivationEvaluator.evaluate`.
+
+Rule4ML predicts the kernel only. An `io_parallel` kernel reads every input value in one clock cycle, so the input must be
+held somewhere until the last value arrives. That storage is outside the kernel, and the Rule4ML resource numbers do not
+include it. CarbonPATH charges it on top of the prediction.
+
+### Evidence that Rule4ML does not count it
+
+| Check | Result | Source |
+| --- | --- | --- |
+| Predicted FF against input size, ReLU on zcu102, 16-bit values | 2,844 FF at 16 elements, 2,273 FF at 1,024 elements. Holding 1,024 values needs at least 16,384 FF. | `docs/rule4ml_board_dimension_sweep.csv` |
+| Generated hls4ml code | `ARRAY_PARTITION` on the input array and `INTERFACE ap_vld` on the port: the input is wires on the kernel boundary | code: `vivado_writer.py:442-451` (fork `atlas/hls4ml-gemm`) |
+| Real synthesis report | Not available. The remote machine has no Vivado or Vitis. | not verified |
+
+Above about 1,024 elements the predicted FF jumps (55,224 at 8,192 elements). This is the predictor outside its training range, not
+real hardware.
+
+### Model
+
+All values are 8-bit (project rule, 2026-10-25). `p` is the number of BRAM blocks of the buffer, all read in parallel.
+
+| Quantity | Formula |
+| --- | --- |
+| Input size | `B = elements x 8` bits |
+| Fewest blocks that hold it | `ceil(B / 18,432)` |
+| Read delay before the kernel starts | `read_cycles = ceil(B / (36 x p))` cycles |
+| Resources added to the prediction | `p` BRAM blocks |
+| Latency added | `read_cycles / frequency` |
+
+- `p` is the FPGA field `input_buffer_blocks`. The annealer chooses it with the move `fpga_input_buffer`. If it is not set, each
+  operation uses the fewest blocks that hold its input.
+- An input that needs more than `p` blocks is rejected (`ResourceExceeded`).
+- The buffer is private to each FPGA (decision 2026-10-25). It is reused by all operations on that FPGA.
+- The buffer is held in BRAM only. Flip-flops and LUT RAM are not modeled.
+- Transfer, buffering and compute run one after another. The producer wait is zero.
+
+### Block geometry (checked against the AMD data sheets, 2026-10-25)
+
+| Fact | Value | Source |
+| --- | --- | --- |
+| Size of one RAMB18 block | 18 Kb | UG573 (UltraScale), UG473 (7 series) |
+| SDP port width, 18 Kb block | 36 bits ("512 x 36 bits") | UG573 "Block RAM Summary"; UG473 Table 1-8 (RAMB18E1: "x32 or x36") |
+| SDP port width, 36 Kb block | 72 bits ("512 x 72 bits") | UG573 "Block RAM Summary"; UG473 "Simple Dual-Port Block RAM" |
+| TDP port width, 18 Kb block | at most 18 bits | UG573; UG473 Table 1-8 |
+
+- We use the 18 Kb block and 36 bits per cycle: the SDP mode of one RAMB18.
+- The 36 bits include 4 parity bits. The model counts all 36 as data. We did not check that Vivado maps data onto the parity bits.
+- The Rule4ML board catalog counts BRAM in 18 Kb units. This is inferred: zcu102 has 1,824, which is 912 BRAM36 blocks times two.
+  The 912 is from memory of the device data sheet, not checked.
+- The 7 series (pynq-z2) and UltraScale+ (zcu102, alveo) boards have the same SDP widths.
+
 ## Caveats for CarbonPATH
 
 | # | Caveat | Ignore? |
@@ -286,6 +340,8 @@ A lead for us: `datasets/analysis/` in the Rule4ML repo has scripts for single-o
 | 13 | Most synthetic data uses the Resource strategy; CarbonPATH uses Latency by default | open |
 | 14 | Latency comes from the C synthesis report (average of min and max cycles). Resources come from logic synthesis. No simulation, no place-and-route. | open |
 | 15 | Rule4ML says nothing about a GEMM done on a systolic array; it was never trained on one | open |
+| 16 | Rule4ML does not count the storage that holds the input. CarbonPATH adds an input buffer (see "Input buffer"). The evidence is indirect: no synthesis report. | open |
+| 17 | Rule4ML takes `ap_fixed<W, I>` only. Every CarbonPATH value is 8-bit, so the evaluator reads any declared width other than 8 as `ap_fixed<8, 3>`. | open |
 
 ## Not verified
 
@@ -294,4 +350,6 @@ A lead for us: `datasets/analysis/` in the Rule4ML repo has scripts for single-o
 - The `io_type` of the subsets other than 2_20 (README says io_parallel for fully connected, io_stream for conv).
 - The pragmas of the training versions (hls4ml 0.8.1 and 1.1.0); I read a newer fork.
 - The cycle accuracy of the GNN, and the full wa-hls4ml paper.
+- A real synthesis report of an `io_parallel` kernel, to confirm that the input storage is outside it.
+- That Vivado maps data onto the 4 parity bits of a x36 BRAM port.
 - The `train_3layer` and validation files.

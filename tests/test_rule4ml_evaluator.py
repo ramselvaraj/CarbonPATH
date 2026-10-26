@@ -8,12 +8,16 @@ from system.utils.OperationEvaluator import EvaluationContext, EvaluatorRegistry
 from system.utils.OperationAssignment import EndpointAssignment
 from system.utils.Rule4MlBoards import fpga_resource_vector, nearest_board
 from system.utils.Rule4MlEvaluators import (
+    Rule4MlActivationInput,
     Rule4MlReluEvaluator,
     Rule4MlReluInputAdapter,
     Rule4MlSoftmaxEvaluator,
     register_rule4ml_evaluators,
 )
-from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
+from system.utils.UnsupportedEvaluation import (
+    ResourceExceeded,
+    UnsupportedEvaluation,
+)
 
 
 BOARDS = {
@@ -44,7 +48,19 @@ BOARDS = {
 }
 
 
-def _fpga(clbs=10000, brams=200, dsps=500, luts=None, ffs=None, frequency_hz=300000000):
+# 32 elements x 8 bits = 256 bits in one 18 Kbit block read at 36 bits per cycle.
+READ_CYCLES = 8
+
+
+def _fpga(
+    clbs=10000,
+    brams=200,
+    dsps=500,
+    luts=None,
+    ffs=None,
+    frequency_hz=300000000,
+    input_buffer_blocks=None,
+):
     return FpgaChiplet(
         id=1,
         name="Chiplet_2",
@@ -58,6 +74,7 @@ def _fpga(clbs=10000, brams=200, dsps=500, luts=None, ffs=None, frequency_hz=300
         relu_implementation=FpgaReluImplementation(clbs_per_lane=5),
         luts=luts,
         ffs=ffs,
+        input_buffer_blocks=input_buffer_blocks,
     )
 
 
@@ -177,7 +194,7 @@ class Rule4MlReluEvaluatorTests(unittest.TestCase):
                 _context(_fpga(), {"energy_per_element_pj": 0.5}),
             )
         self.assertEqual(estimate.evaluator_id, "rule4ml_fpga_relu_v1")
-        self.assertAlmostEqual(estimate.compute_latency_ns, 100.0 / 300000000 * 1e9)
+        self.assertAlmostEqual(estimate.compute_latency_ns, (100.0 + READ_CYCLES) / 300000000 * 1e9)
         self.assertAlmostEqual(estimate.dynamic_energy_pj, 32 * 0.5)
         _, kwargs = predict.call_args
         self.assertEqual(kwargs["board"], "pynq-z2")
@@ -199,7 +216,85 @@ class Rule4MlReluEvaluatorTests(unittest.TestCase):
                 EndpointAssignment(1, "fpga"),
                 _context(_fpga(), {"latency_metric": "interval"}),
             )
-        self.assertAlmostEqual(estimate.compute_latency_ns, 10.0 / 300000000 * 1e9)
+        self.assertAlmostEqual(estimate.compute_latency_ns, (10.0 + READ_CYCLES) / 300000000 * 1e9)
+
+    def test_prediction_above_fpga_resources_is_rejected(self):
+        # _fpga() has 10000 CLBs = 80000 LUTs and 200 BRAM.
+        with mock.patch(
+            "system.utils.Rule4MlEvaluators.predict_activation",
+            return_value={
+                "cycles": 1.0,
+                "interval": 1.0,
+                "resources": {"LUT": 80001.0, "BRAM": 10.0},
+            },
+        ):
+            with self.assertRaisesRegex(ResourceExceeded, "LUT 80001 > 80000"):
+                Rule4MlReluEvaluator().evaluate(
+                    _relu_view(),
+                    EndpointAssignment(1, "fpga"),
+                    _context(_fpga()),
+                )
+
+    def test_prediction_at_fpga_resources_is_accepted(self):
+        with mock.patch(
+            "system.utils.Rule4MlEvaluators.predict_activation",
+            return_value={
+                "cycles": 1.0,
+                "interval": 1.0,
+                "resources": {"LUT": 80000.0, "BRAM": 199.0, "DSP": 500.0},
+            },
+        ):
+            Rule4MlReluEvaluator().evaluate(
+                _relu_view(),
+                EndpointAssignment(1, "fpga"),
+                _context(_fpga()),
+            )
+
+    def test_input_buffer_bram_counts_against_the_fpga(self):
+        # The prediction needs 200 BRAM and the input buffer needs one more.
+        with mock.patch(
+            "system.utils.Rule4MlEvaluators.predict_activation",
+            return_value={
+                "cycles": 1.0,
+                "interval": 1.0,
+                "resources": {"BRAM": 200.0},
+            },
+        ):
+            with self.assertRaisesRegex(ResourceExceeded, "BRAM 201 > 200"):
+                Rule4MlReluEvaluator().evaluate(
+                    _relu_view(),
+                    EndpointAssignment(1, "fpga"),
+                    _context(_fpga()),
+                )
+
+    def test_more_input_buffer_blocks_start_the_kernel_sooner(self):
+        def latency(blocks):
+            with _patched_prediction(cycles=0.0):
+                return Rule4MlReluEvaluator().evaluate(
+                    _relu_view(),
+                    EndpointAssignment(1, "fpga"),
+                    _context(_fpga(input_buffer_blocks=blocks)),
+                ).compute_latency_ns
+
+        self.assertAlmostEqual(latency(1), 8 / 300000000 * 1e9)
+        self.assertAlmostEqual(latency(8), 1 / 300000000 * 1e9)
+
+    def test_fpga_buffer_too_small_for_the_input_is_rejected(self):
+        # 8192 elements x 8 bits = 65536 bits need four 18 Kbit blocks.
+        view = Rule4MlActivationInput(
+            operation_id="relu_1",
+            element_count=8192,
+            shape=(8192,),
+            precision=None,
+            reuse_factor=None,
+        )
+        with _patched_prediction(cycles=1.0):
+            with self.assertRaisesRegex(ResourceExceeded, "needs at least 4"):
+                Rule4MlReluEvaluator().evaluate(
+                    view,
+                    EndpointAssignment(1, "fpga"),
+                    _context(_fpga(input_buffer_blocks=2)),
+                )
 
     def test_unknown_setting_is_unsupported(self):
         with self.assertRaises(UnsupportedEvaluation):
@@ -251,11 +346,14 @@ if __name__ == "__main__":
 
 
 class Rule4MlPrecisionTests(unittest.TestCase):
-    def test_atlas_precision_becomes_ap_fixed(self):
+    def test_every_value_is_8_bit_fixed_point(self):
         from system.utils.Rule4MlEvaluators import rule4ml_precision
 
-        self.assertEqual(rule4ml_precision("fixed<9,3,RND,WRAP,0>"), "ap_fixed<9, 3>")
-        self.assertEqual(rule4ml_precision("ufixed<2,1,RND,WRAP,0>"), "ap_fixed<2, 1>")
-        self.assertEqual(rule4ml_precision("ap_fixed<16, 6>"), "ap_fixed<16, 6>")
-        self.assertEqual(rule4ml_precision("?"), "ap_fixed<16, 6>")
-        self.assertEqual(rule4ml_precision(None), "ap_fixed<16, 6>")
+        # A declared 8-bit width keeps its integer bits.
+        self.assertEqual(rule4ml_precision("fixed<8,2,RND,WRAP,0>"), "ap_fixed<8, 2>")
+        self.assertEqual(rule4ml_precision("ufixed<8,2,RND,WRAP,0>"), "ap_fixed<8, 2>")
+        self.assertEqual(rule4ml_precision("ap_fixed<8, 4>"), "ap_fixed<8, 4>")
+        self.assertEqual(rule4ml_precision("int8"), "ap_fixed<8, 8>")
+        # Any other width, or none, is quantized to the 8-bit default.
+        for precision in ("fixed<9,3,RND,WRAP,0>", "ap_fixed<16, 6>", "?", None):
+            self.assertEqual(rule4ml_precision(precision), "ap_fixed<8, 3>")

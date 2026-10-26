@@ -154,11 +154,13 @@ ATLAS_LAYER_COLUMNS = [
     "element_count",
     "compute_latency_ns",
     "movement_latency_ns",
+    "parameter_load_latency_ns",
     "latency_ns",
     "compute_energy_pj",
     "reduction_latency_ns",
     "reduction_communication_energy_pj",
     "movement_energy_pj",
+    "parameter_load_energy_pj",
     "movement_method",
     "movement_source_endpoint",
     "movement_destination_endpoint",
@@ -174,7 +176,11 @@ def _atlas_operation_row(result, power):
     movement_energy_pj = (
         movement.charged_energy_pj if movement is not None else 0.0
     )
-    latency_ns = result.compute_latency_ns + movement_latency_ns
+    latency_ns = (
+        result.compute_latency_ns
+        + movement_latency_ns
+        + result.parameter_load_latency_ns
+    )
     return {
         "layer_index": result.index,
         "layer_name": result.operation_id,
@@ -189,6 +195,7 @@ def _atlas_operation_row(result, power):
         "element_count": result.element_count,
         "compute_latency_ns": result.compute_latency_ns,
         "movement_latency_ns": movement_latency_ns,
+        "parameter_load_latency_ns": result.parameter_load_latency_ns,
         "latency_ns": latency_ns,
         "compute_energy_pj": result.compute_energy_pj,
         "reduction_latency_ns": result.reduction_latency_ns,
@@ -196,6 +203,7 @@ def _atlas_operation_row(result, power):
             result.reduction_communication_energy_pj
         ),
         "movement_energy_pj": movement_energy_pj,
+        "parameter_load_energy_pj": result.parameter_load_energy_pj,
         "movement_method": movement.method if movement is not None else None,
         "movement_source_endpoint": (
             movement.source_endpoint if movement is not None else None
@@ -207,6 +215,7 @@ def _atlas_operation_row(result, power):
             power * latency_ns * 1000
             + result.compute_energy_pj
             + movement_energy_pj
+            + result.parameter_load_energy_pj
         ),
     }
 

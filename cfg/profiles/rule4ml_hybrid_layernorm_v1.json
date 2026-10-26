@@ -1,0 +1,22 @@
+{
+    "profile": "rule4ml_hybrid_layernorm_v1",
+    "version": 1,
+    "evaluators": {
+        "gemm": "legacy_scale_sim_gemm_v1",
+        "relu": {
+            "id": "rule4ml_hybrid_relu_v1",
+            "settings": {
+                "latency_floor": "legacy_lanes",
+                "null_energy_per_element_pj": 0.1
+            }
+        },
+        "layernorm": "fpga_layernorm_v1",
+        "softmax": {
+            "id": "rule4ml_hybrid_softmax_v1",
+            "settings": {}
+        }
+    },
+    "assignment_policy": "all_sas_single_fpga_v1",
+    "movement_policy": "distributed_activation_boundary_v2",
+    "transfer_model": "route_transfer_v1"
+}

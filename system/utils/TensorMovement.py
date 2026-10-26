@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from system.utils.FpgaSplit import fpga_row_ranges
 from system.utils.TransferEstimator import (
     ResolvedRoute,
     TransferEstimator,
@@ -146,13 +147,21 @@ def _endpoint_value(endpoint_ids):
     return endpoint_ids[0] if len(endpoint_ids) == 1 else endpoint_ids
 
 
-def _single_endpoint(assignment):
-    endpoint_ids = tuple(assignment.endpoint_ids)
-    if len(endpoint_ids) != 1:
-        raise UnsupportedEvaluation(
-            "distributed movement requires a single FPGA endpoint"
-        )
-    return endpoint_ids[0]
+def _fpga_row_blocks(request, assignment, operation):
+    """The row block of every FPGA chiplet that runs ``operation``."""
+    return fpga_row_ranges(
+        getattr(operation, "operation_id", "operation"),
+        request.tensor_shape[0],
+        assignment.endpoint_ids,
+    )
+
+
+def _intersections(blocks, row0, row1):
+    """The part of rows ``[row0, row1)`` in each block, as ``(owner, first, end)``."""
+    for owner, (start, end) in sorted(blocks.items()):
+        first, last = max(row0, start), min(row1, end)
+        if first < last:
+            yield owner, first, last
 
 
 def _route_links(route):
@@ -427,7 +436,9 @@ class DistributedActivationMovementService:
                 "distributed movement requires the prepared GEMM mapping"
             )
         scheduler, _ = request.producer_prepared
-        fpga = _single_endpoint(request.consumer_assignment)
+        blocks = _fpga_row_blocks(
+            request, request.consumer_assignment, request.consumer_operation
+        )
         rows, features = request.tensor_shape
         ownership = self._output_ownership(scheduler)
         coverage = sum((m1 - m0) * (n1 - n0) for (m0, m1, n0, n1) in ownership)
@@ -435,16 +446,18 @@ class DistributedActivationMovementService:
             raise UnsupportedEvaluation(
                 "GEMM output regions do not cover the activation tensor exactly once"
             )
+        # Each FPGA chiplet gets the rows it owns from every SA that holds them.
         drafts = [
-            self._draft_slice(request, owner, fpga, m0, m1, n0, n1)
+            self._draft_slice(request, owner, fpga, first, end, n0, n1)
             for (m0, m1, n0, n1), owner in sorted(ownership.items())
+            for fpga, first, end in _intersections(blocks, m0, m1)
         ]
         return self._aggregate(
             request,
             drafts,
             logical_bytes=rows * features,
             source=_endpoint_value(request.producer_assignment.endpoint_ids),
-            destination=fpga,
+            destination=_endpoint_value(request.consumer_assignment.endpoint_ids),
         )
 
     def _plan_fpga_to_gemm(self, request):
@@ -453,7 +466,9 @@ class DistributedActivationMovementService:
                 "distributed movement requires the prepared GEMM mapping"
             )
         scheduler, _ = request.consumer_prepared
-        fpga = _single_endpoint(request.producer_assignment)
+        blocks = _fpga_row_blocks(
+            request, request.producer_assignment, request.producer_operation
+        )
         rows, features = request.tensor_shape
         requirements = {}
         for core in scheduler.systolic_arrays:
@@ -472,12 +487,42 @@ class DistributedActivationMovementService:
                 raise UnsupportedEvaluation(
                     "consumer GEMM input region exceeds the producer tensor"
                 )
-            drafts.append(self._draft_slice(request, fpga, sa_id, m0, m1, k0, k1))
+            for fpga, first, end in _intersections(blocks, m0, m1):
+                drafts.append(
+                    self._draft_slice(request, fpga, sa_id, first, end, k0, k1)
+                )
         return self._aggregate(
             request,
             drafts,
             logical_bytes=rows * features,
-            source=fpga,
+            source=_endpoint_value(request.producer_assignment.endpoint_ids),
+            destination=_endpoint_value(request.consumer_assignment.endpoint_ids),
+        )
+
+    def _plan_fpga_to_fpga(self, request):
+        """Move rows between two different sets of FPGA chiplets.
+
+        A chiplet of the consumer reads each of its rows from the chiplet of
+        the producer that owns that row. Rows that stay on one chiplet cost
+        nothing.
+        """
+        rows, features = request.tensor_shape
+        produced = _fpga_row_blocks(
+            request, request.producer_assignment, request.producer_operation
+        )
+        consumed = _fpga_row_blocks(
+            request, request.consumer_assignment, request.consumer_operation
+        )
+        drafts = [
+            self._draft_slice(request, producer, consumer, first, end, 0, features)
+            for consumer, (c0, c1) in sorted(consumed.items())
+            for producer, first, end in _intersections(produced, c0, c1)
+        ]
+        return self._aggregate(
+            request,
+            drafts,
+            logical_bytes=rows * features,
+            source=_endpoint_value(request.producer_assignment.endpoint_ids),
             destination=_endpoint_value(request.consumer_assignment.endpoint_ids),
         )
 

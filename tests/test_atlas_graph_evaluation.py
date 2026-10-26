@@ -324,7 +324,7 @@ class EvaluationProfileTests(unittest.TestCase):
 
     def test_unknown_operation_type_is_unsupported(self):
         with self.assertRaises(UnsupportedEvaluation):
-            load_evaluation_profile().evaluator_id_for("layernorm")
+            load_evaluation_profile().evaluator_id_for("batchnorm")
 
     def test_gemm_mapping_settings_belong_to_the_gemm_evaluator(self):
         profile = parse_evaluation_profile(

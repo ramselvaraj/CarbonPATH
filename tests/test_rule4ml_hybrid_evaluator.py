@@ -26,6 +26,8 @@ from tests.test_rule4ml_evaluator import (
 )
 
 FREQUENCY_HZ = 300000000
+# 32 elements x 8 bits = 256 bits in one 18 Kbit block read at 36 bits per cycle.
+READ_CYCLES = 8
 
 
 def _softmax_view():
@@ -83,16 +85,21 @@ class HybridReluTests(unittest.TestCase):
 
     def test_rule4ml_latency_wins_when_it_is_larger(self):
         estimate = _relu(_fpga_with(relu_lanes=128), cycles=100.0)
-        self.assertAlmostEqual(estimate.compute_latency_ns, 100.0 / FREQUENCY_HZ * 1e9)
+        self.assertAlmostEqual(estimate.compute_latency_ns, (100.0 + READ_CYCLES) / FREQUENCY_HZ * 1e9)
 
     def test_floor_replaces_a_zero_cycle_prediction(self):
-        # 32 elements / 4 lanes = 8 cycles from the architecture.
-        estimate = _relu(_fpga_with(relu_lanes=4), cycles=0.0)
+        # 32 elements / 4 lanes = 8 cycles from the architecture. Eight blocks
+        # read the input in one cycle, so the floor is the larger term.
+        estimate = _relu(
+            _fpga_with(relu_lanes=4, input_buffer_blocks=8), cycles=0.0
+        )
         self.assertAlmostEqual(estimate.compute_latency_ns, 8 / FREQUENCY_HZ * 1e9)
 
     def test_floor_none_keeps_the_zero_cycle_prediction(self):
         estimate = _relu(_fpga_with(relu_lanes=4), {"latency_floor": "none"}, cycles=0.0)
-        self.assertEqual(estimate.compute_latency_ns, 0.0)
+        self.assertAlmostEqual(
+            estimate.compute_latency_ns, READ_CYCLES / FREQUENCY_HZ * 1e9
+        )
 
     def test_more_lanes_lower_the_floor(self):
         slow = _relu(_fpga_with(relu_lanes=2), cycles=0.0).compute_latency_ns
@@ -117,7 +124,7 @@ class HybridReluTests(unittest.TestCase):
                     {"latency_metric": "interval", "latency_floor": "none"},
                 ),
             )
-        self.assertAlmostEqual(estimate.compute_latency_ns, 10.0 / FREQUENCY_HZ * 1e9)
+        self.assertAlmostEqual(estimate.compute_latency_ns, (10.0 + READ_CYCLES) / FREQUENCY_HZ * 1e9)
 
     def test_unknown_setting_is_unsupported(self):
         with self.assertRaises(UnsupportedEvaluation):
@@ -134,7 +141,7 @@ class HybridSoftmaxTests(unittest.TestCase):
     def test_latency_is_rule4ml_and_energy_is_per_element(self):
         estimate = self._softmax(_fpga_with())
         self.assertEqual(estimate.evaluator_id, "rule4ml_hybrid_softmax_v1")
-        self.assertAlmostEqual(estimate.compute_latency_ns, 100.0 / FREQUENCY_HZ * 1e9)
+        self.assertAlmostEqual(estimate.compute_latency_ns, (100.0 + READ_CYCLES) / FREQUENCY_HZ * 1e9)
         # The default matches the placeholder softmax: 2.0 pJ per element.
         self.assertAlmostEqual(estimate.dynamic_energy_pj, 32 * 2.0)
 
@@ -181,6 +188,32 @@ class SoftmaxImplementationSchemaTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     FpgaChiplet.from_dict(
                         "Chiplet_1", self._fpga_dict(softmax_implementation=bad)
+                    )
+
+
+class InputBufferSchemaTests(unittest.TestCase):
+    def test_default_is_sized_per_operation(self):
+        chiplet = FpgaChiplet.from_dict(
+            "Chiplet_1", SoftmaxImplementationSchemaTests._fpga_dict()
+        )
+        self.assertIsNone(chiplet.input_buffer_blocks)
+
+    def test_value_is_read_from_the_architecture(self):
+        chiplet = FpgaChiplet.from_dict(
+            "Chiplet_1",
+            SoftmaxImplementationSchemaTests._fpga_dict(input_buffer_blocks=4),
+        )
+        self.assertEqual(chiplet.input_buffer_blocks, 4)
+
+    def test_invalid_values_are_rejected(self):
+        for bad in (0, -1, 1.5, True, "4"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    FpgaChiplet.from_dict(
+                        "Chiplet_1",
+                        SoftmaxImplementationSchemaTests._fpga_dict(
+                            input_buffer_blocks=bad
+                        ),
                     )
 
 

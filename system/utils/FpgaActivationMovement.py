@@ -3,7 +3,8 @@
 ``distributed_activation_boundary_v1`` routes GEMM <-> ReLU handoffs. This
 policy applies the same slice, ownership, and routing rules to every FPGA
 activation operation (for example ReLU and Softmax), and retains a tensor that stays on
-one FPGA between two activations. It is selected by an evaluation profile's
+the same FPGA chiplets between two activations, and moves the rows between two
+different sets of FPGA chiplets. It is selected by an evaluation profile's
 ``movement_policy`` field; the v1 policy is unchanged.
 """
 
@@ -43,11 +44,17 @@ class FpgaActivationMovementService(DistributedActivationMovementService):
         ):
             return self._retained_plan(request)
 
+        if (
+            producer_type in FPGA_ACTIVATION_OPERATIONS
+            and consumer_type in FPGA_ACTIVATION_OPERATIONS
+        ):
+            return self._plan_fpga_to_fpga(request)
+
         handler_name = self._SUPPORTED_PAIRS.get((producer_type, consumer_type))
         if handler_name is None:
             raise UnsupportedEvaluation(
                 f"movement policy '{self.policy_id}' supports gemm<->activation "
-                f"and same-FPGA activation handoffs, not "
+                f"and handoffs between FPGA activations, not "
                 f"{producer_type}->{consumer_type}"
             )
         return getattr(self, handler_name)(request)

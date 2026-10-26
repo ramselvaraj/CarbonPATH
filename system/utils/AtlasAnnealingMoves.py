@@ -54,9 +54,11 @@ MOVE_TYPES = (
     "handoff_movement",
     "relu_fusion",
     "fpga_count",
+    "fpga_set",
     "fpga_board",
     "fpga_frequency",
     "fpga_relu",
+    "fpga_input_buffer",
     "mem_type",
     "interconnect",
     "protocol",
@@ -332,19 +334,107 @@ def _mutate_relu_fusion(
     )
 
 
-def _mutate_fpga_count(endpoints, params, rng):
-    """Select a different FPGA count from the search space list.
+def _fpga_count_options(params):
+    options = params.get("fpga", {}).get("count")
+    if (
+        not isinstance(options, list)
+        or not options
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in options
+        )
+    ):
+        raise UnsupportedEvaluation(
+            "search space fpga.count must be a list of non-negative integers"
+        )
+    return sorted(set(options))
 
-    The list has one option now, so this move has no alternative. A second
-    option needs the code that adds and removes an FPGA endpoint.
+
+def _new_fpga_chiplet(moved, endpoints, params, rng):
+    """A new FPGA chiplet: a copy of an existing one, else a draw from the search space."""
+    if endpoints.fpga_keys:
+        return copy.deepcopy(moved[rng.choice(endpoints.fpga_keys)])
+    fpga_space = params["fpga"]
+    chiplet = {
+        "chiplet_type": "fpga",
+        "tech_node": str(rng.choice(params["tech_nodes"])),
+        "frequency_hz": rng.choice(fpga_space["frequency_hz"]),
+        "relu_implementation": copy.deepcopy(
+            rng.choice(fpga_space["relu_implementation"])
+        ),
+        **board_chiplet_fields(rng.choice(fpga_space["boards"])),
+    }
+    if fpga_space.get("input_buffer_blocks"):
+        chiplet["input_buffer_blocks"] = rng.choice(fpga_space["input_buffer_blocks"])
+    return chiplet
+
+
+def _mutate_fpga_count(architecture, mapping, endpoints, params, rng):
+    """Change the number of FPGA chiplets to another count of the search space.
+
+    A new chiplet joins no operation; the ``fpga_set`` move places it. A
+    removed chiplet leaves its operations; an operation without a chiplet
+    makes the design point invalid.
     """
     current = len(endpoints.fpga_keys)
-    options = params.get("fpga", {}).get("count", [current])
-    _choose_alternative(rng, options, current, "FPGA count")
-    raise UnsupportedEvaluation(
-        "the search space lists more than one FPGA count, but the FPGA-count "
-        "move supports one option now"
+    targets = [value for value in _fpga_count_options(params) if value != current]
+    if not targets:
+        raise NoAlternative("no alternative FPGA count is available")
+    target = rng.choice(targets)
+
+    moved = copy.deepcopy(architecture)
+    added_keys = ()
+    if target > current:
+        used_ids = [
+            int(key.split("_", 1)[1]) for key in moved if key.startswith("Chiplet_")
+        ]
+        added = []
+        for offset in range(target - current):
+            key = f"Chiplet_{max(used_ids, default=0) + 1 + offset}"
+            moved[key] = _new_fpga_chiplet(moved, endpoints, params, rng)
+            added.append(key)
+        added_keys = tuple(added)
+    else:
+        remaining = list(endpoints.fpga_keys)
+        for _ in range(current - target):
+            key = rng.choice(remaining)
+            remaining.remove(key)
+            del moved[key]
+
+    rebuilt = rebuild_package_for_endpoints(moved, params, rng)
+    labels = canonical_chiplet_labels(rebuilt)
+    moved_mapping = mapping.with_endpoints_relabeled(
+        {
+            _endpoint_id(old): _endpoint_id(new)
+            for old, new in labels.items()
+            if old not in added_keys
+        },
     )
+    return canonicalize_chiplet_labels(rebuilt), moved_mapping
+
+
+def _mutate_fpga_set(mapping, fpga_ids, rng):
+    """Add one FPGA chiplet to, or remove one from, the set of one FPGA operation.
+
+    The rows of the operation divide over the chiplets of its set.
+    """
+    indexes = [
+        index
+        for index, operation in enumerate(mapping.operations)
+        if operation.endpoint_kind == "fpga"
+    ]
+    if not indexes or len(fpga_ids) < 2:
+        raise NoAlternative("no alternative FPGA set is available")
+    index = rng.choice(indexes)
+    current = mapping.operations[index].endpoint_ids
+    fpga_id = rng.choice(
+        [value for value in fpga_ids if len(current) > 1 or value not in current]
+    )
+    if fpga_id in current:
+        moved = tuple(value for value in current if value != fpga_id)
+    else:
+        moved = current + (fpga_id,)
+    return mapping.with_operation(index, endpoint_ids=moved)
 
 
 def _endpoint_id(key):
@@ -455,12 +545,16 @@ def mutate_atlas_design_point(
                     f"{fpga_key} must name one of the search space boards "
                     f"({', '.join(boards)}) with its 'board' field"
                 )
+    if not params.get("fpga", {}).get("input_buffer_blocks"):
+        candidate_moves.remove("fpga_input_buffer")
     if not endpoints.fpga_keys:
         candidate_moves = [
             candidate
             for candidate in candidate_moves
             if not candidate.startswith("fpga_") or candidate == "fpga_count"
         ]
+    if len(endpoints.fpga_keys) < 2 and "fpga_set" in candidate_moves:
+        candidate_moves.remove("fpga_set")
 
     if not _fusion_candidates(mapping, endpoints, fusion_types):
         candidate_moves.remove("relu_fusion")
@@ -500,7 +594,9 @@ def _apply_move(
     if move == "sa_count":
         return _mutate_sa_count(architecture, mapping, params, rng)
     if move == "fpga_count":
-        _mutate_fpga_count(endpoints, params, rng)
+        return _mutate_fpga_count(architecture, mapping, endpoints, params, rng)
+    if move == "fpga_set":
+        return architecture, _mutate_fpga_set(mapping, endpoints.fpga_ids, rng)
     if move == "gemm_sa_set":
         return architecture, _mutate_gemm_sa_set(mapping, endpoints.sa_ids, rng)
     if move == "handoff_movement":
@@ -555,6 +651,15 @@ def _apply_move(
             params["fpga"]["frequency_hz"],
             fpga["frequency_hz"],
             "FPGA frequency",
+        )
+    elif move == "fpga_input_buffer":
+        fpga_key = rng.choice(endpoints.fpga_keys)
+        fpga = moved[fpga_key]
+        fpga["input_buffer_blocks"] = _choose_alternative(
+            rng,
+            params["fpga"]["input_buffer_blocks"],
+            fpga.get("input_buffer_blocks"),
+            "FPGA input buffer blocks",
         )
     elif move == "fpga_relu":
         fpga_key = rng.choice(endpoints.fpga_keys)

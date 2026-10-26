@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from system.utils.ParameterLoad import PARAMETER_SOURCES
 from system.utils.Rule4MlBoards import board_chiplet_fields, load_boards
 
 
@@ -95,6 +96,29 @@ class FpgaSoftmaxImplementation:
         return cls(energy_per_element_pj=float(energy))
 
 
+@dataclass(frozen=True)
+class FpgaLayerNormImplementation:
+    """LayerNorm implementation parameters; the energy rate is provisional."""
+
+    energy_per_element_pj: float = 2.0
+
+    @classmethod
+    def from_dict(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("layernorm_implementation must be an object")
+        unknown = sorted(set(value) - {"energy_per_element_pj"})
+        if unknown:
+            raise ValueError(
+                f"Unsupported layernorm_implementation field(s): {', '.join(unknown)}"
+            )
+        energy = value.get("energy_per_element_pj", cls.energy_per_element_pj)
+        if isinstance(energy, bool) or not isinstance(energy, (int, float)) or energy < 0:
+            raise ValueError(
+                "layernorm_implementation.energy_per_element_pj must be >= 0"
+            )
+        return cls(energy_per_element_pj=float(energy))
+
+
 @dataclass
 class FpgaChiplet:
     id: int
@@ -113,7 +137,17 @@ class FpgaChiplet:
     softmax_implementation: FpgaSoftmaxImplementation = field(
         default_factory=FpgaSoftmaxImplementation
     )
+    layernorm_implementation: FpgaLayerNormImplementation = field(
+        default_factory=FpgaLayerNormImplementation
+    )
     board: str | None = None
+    # Where the constants of the kernels come from: "dram" loads them over the
+    # route to the memory-attached systolic array; "bitstream" bakes them into
+    # the configuration, so there is no load per inference.
+    parameter_source: str = "bitstream"
+    # BRAM blocks of the input buffer read in parallel; None sizes the buffer
+    # for each operation at the fewest blocks that hold its input.
+    input_buffer_blocks: int | None = None
 
     @property
     def chiplet_type(self):
@@ -137,6 +171,9 @@ class FpgaChiplet:
             "board",
             "relu_implementation",
             "softmax_implementation",
+            "layernorm_implementation",
+            "parameter_source",
+            "input_buffer_blocks",
         }
         unknown = sorted(set(value) - allowed)
         if unknown:
@@ -184,6 +221,23 @@ class FpgaChiplet:
                         f"has {expected[field]}"
                     )
 
+        input_buffer_blocks = value.get("input_buffer_blocks")
+        if input_buffer_blocks is not None and (
+            isinstance(input_buffer_blocks, bool)
+            or not isinstance(input_buffer_blocks, int)
+            or input_buffer_blocks <= 0
+        ):
+            raise ValueError(
+                f"{name}.input_buffer_blocks must be a positive integer when present"
+            )
+
+        parameter_source = value.get("parameter_source", "bitstream")
+        if parameter_source not in PARAMETER_SOURCES:
+            raise ValueError(
+                f"{name}.parameter_source must be one of: "
+                f"{', '.join(PARAMETER_SOURCES)}"
+            )
+
         implementation = FpgaReluImplementation.from_dict(
             value.get("relu_implementation", {})
         )
@@ -205,5 +259,10 @@ class FpgaChiplet:
             softmax_implementation=FpgaSoftmaxImplementation.from_dict(
                 value.get("softmax_implementation", {})
             ),
+            layernorm_implementation=FpgaLayerNormImplementation.from_dict(
+                value.get("layernorm_implementation", {})
+            ),
             board=board,
+            parameter_source=parameter_source,
+            input_buffer_blocks=input_buffer_blocks,
         )
