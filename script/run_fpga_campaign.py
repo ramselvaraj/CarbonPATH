@@ -163,6 +163,29 @@ def initial_architecture(seed, space):
     return architecture
 
 
+def feasible_start(k, out, graph, profile, attempts=500):
+    """The first random start of job ``k`` that the profile can evaluate.
+
+    A start with a too-small input buffer or a too-small FPGA cannot be scored,
+    and the annealer needs a scored start. Starts are drawn from seeds
+    ``INITIAL_SEED_BASE + k + 1000 * a`` and use the shared search space, so every
+    arm of a seed gets the same start.
+    """
+    space = load_json(SEARCH_SPACE)
+    scoreless = RawWeightedSumObjective({"latency_ns": 0.0})
+    with tempfile.TemporaryDirectory(prefix=f"cp-start-{k}-") as directory:
+        cache = make_cache(Path(out) / "base_cache.csv", directory)
+        for attempt in range(attempts):
+            architecture = initial_architecture(INITIAL_SEED_BASE + k + 1000 * attempt, space)
+            try:
+                with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
+                    evaluate_atlas_design_point(cache, architecture, graph, profile, scoreless)
+            except UnsupportedEvaluation:
+                continue
+            return architecture, attempt + 1
+    raise RuntimeError(f"seed {k}: no start that the profile can evaluate in {attempts} draws")
+
+
 def arm_space(arm):
     space = load_json(SEARCH_SPACE)
     space["fpga"]["count"] = list(ARMS[arm]["count"])
@@ -294,8 +317,9 @@ def run_one(out, network, arm, k, schedule_name):
             calibration=calibration,
             normalization_mode=calibration_mode,
         )
-        architecture = initial_architecture(INITIAL_SEED_BASE + k, space)
+        architecture, start_draws = feasible_start(k, out, graph, profile)
         write_json(directory / "initial_architecture.json", architecture)
+        counts["start_draws"] = start_draws
 
         def on_level(_decision, rows):
             for row in rows:
