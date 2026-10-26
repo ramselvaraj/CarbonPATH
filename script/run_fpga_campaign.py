@@ -24,6 +24,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import copy
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import random
@@ -91,9 +92,16 @@ OBJECTIVE = "t5"
 INITIAL_SEED_BASE = 12000
 SEARCH_SEED_BASE = 13000
 CALIBRATION_SEED_BASE = 10000
-CALIBRATION_SAMPLES = 10
+CALIBRATION_SAMPLES = 10000
 SCHEDULES = {
     **SCHEDULES,
+    # The defaults of main.py sim_annealing: 4000 -> 0.001 by 0.99, 20 moves per level.
+    "main_default_30260": {
+        "initial_temp": 4000,
+        "freezing_temp": 1e-3,
+        "max_move_per_temp_step": 20,
+        "cooling_rate": 0.99,
+    },
     "pilot": {
         "initial_temp": 8,
         "freezing_temp": 1e-1,
@@ -149,8 +157,39 @@ def make_cache(base_cache, directory):
 # ---------------------------------------------------------------- calibration
 
 
-def calibrate(out, network):
-    """Calibrate the objective of one network with random packages that hold an FPGA."""
+_WORKER = {}
+
+
+def _calibration_worker_init(out, network, directory_root):
+    """Give each worker its own cache clone, graph and profile."""
+    directory = tempfile.mkdtemp(prefix=f"w{os.getpid()}-", dir=directory_root)
+    _WORKER["cache"] = make_cache(Path(out) / "base_cache.csv", directory)
+    _WORKER["graph"] = load_atlas_graph(NETWORKS[network])
+    _WORKER["profile"] = load_evaluation_profile(PROFILE)
+    _WORKER["space"] = load_json(SEARCH_SPACE)
+    _WORKER["scoreless"] = RawWeightedSumObjective({"latency_ns": 0.0})
+
+
+def _calibration_sample(seed):
+    """Evaluate one random package. Returns (seed, point or None, reason)."""
+    with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
+        try:
+            architecture = initial_architecture(seed, _WORKER["space"])
+            point, _ = evaluate_atlas_design_point(
+                _WORKER["cache"], architecture, _WORKER["graph"],
+                _WORKER["profile"], _WORKER["scoreless"],
+            )
+        except UnsupportedEvaluation as error:
+            return seed, None, str(error)
+    return seed, point, ""
+
+
+def calibrate(out, network, samples=CALIBRATION_SAMPLES, workers=1):
+    """Calibrate the objective of one network with random packages that hold an FPGA.
+
+    Seeds are evaluated in parallel but consumed in seed order, so the first
+    ``samples`` valid packages are the same for any worker count.
+    """
     Path(out).mkdir(parents=True, exist_ok=True)
     if not (Path(out) / "base_cache.csv").exists():
         initialize_experiment_cache(BASE_CACHE, Path(out) / "base_cache.csv")
@@ -159,42 +198,43 @@ def calibrate(out, network):
     path = calibration_dir / "calibration.json"
     if path.exists():
         return path
-    graph = load_atlas_graph(NETWORKS[network])
-    profile = load_evaluation_profile(PROFILE)
-    space = load_json(SEARCH_SPACE)
-    scoreless = RawWeightedSumObjective({"latency_ns": 0.0})
     points, skipped = [], []
+    attempt = 0
+    limit = 20 * samples
+    seeds = range(CALIBRATION_SEED_BASE, CALIBRATION_SEED_BASE + limit)
+    started = time.time()
     with tempfile.TemporaryDirectory(prefix=f"cp-calib-{network}-") as directory:
-        base = Path(out) / "base_cache.csv"
-        cache = make_cache(base, directory)
-        with (calibration_dir / "calibration.log").open("w") as log:
-            with redirect_stdout(log), redirect_stderr(log):
-                attempt = 0
-                while len(points) < CALIBRATION_SAMPLES and attempt < 20 * CALIBRATION_SAMPLES:
-                    seed = CALIBRATION_SEED_BASE + attempt
-                    attempt += 1
-                    try:
-                        architecture = initial_architecture(seed, space)
-                        point, _ = evaluate_atlas_design_point(
-                            cache, architecture, graph, profile, scoreless
-                        )
-                    except UnsupportedEvaluation as error:
-                        skipped.append({"seed": seed, "reason": str(error)})
-                        continue
+        context = multiprocessing.get_context("fork")
+        with context.Pool(
+            workers, _calibration_worker_init, (out, network, directory)
+        ) as pool:
+            for seed, point, reason in pool.imap(_calibration_sample, seeds, chunksize=8):
+                attempt += 1
+                if point is None:
+                    skipped.append({"seed": seed, "reason": reason})
+                else:
                     points.append(point)
-        cache.dump_cache()
-        shutil.copy2(cache.dir, base)
-    if len(points) < CALIBRATION_SAMPLES:
+                if attempt % 500 == 0:
+                    (calibration_dir / "progress.txt").write_text(
+                        f"{len(points)} valid, {len(skipped)} rejected, "
+                        f"{time.time() - started:.0f} s\n"
+                    )
+                if len(points) >= samples:
+                    pool.terminate()
+                    break
+    if len(points) < samples:
         raise RuntimeError(
-            f"{network}: only {len(points)} of {CALIBRATION_SAMPLES} calibration "
+            f"{network}: only {len(points)} of {samples} calibration "
             f"samples evaluated; {len(skipped)} were rejected"
         )
-    identity = f"{network}|{PROFILE.name}|{CALIBRATION_MODEL_VERSION}|{attempt}"
+    identity = f"{network}|{PROFILE.name}|{CALIBRATION_MODEL_VERSION}|{samples}|{attempt}"
     cost_averages = summarize_design_points(
         points, calibration_identity=identity, model_version=CALIBRATION_MODEL_VERSION
     )
     validate_calibration(cost_averages)
-    cost_averages["_skipped_samples"] = skipped
+    cost_averages["_calibration_samples"] = len(points)
+    cost_averages["_skipped_samples"] = skipped[:200]
+    cost_averages["_skipped_count"] = len(skipped)
     write_json(path, cost_averages)
     return path
 
@@ -347,7 +387,7 @@ def launch(args):
     })
     for network in args.networks:
         say(f"calibrate {network}")
-        calibrate(out, network)
+        calibrate(out, network, args.calibration_samples, args.workers)
     pending = [
         job for job in jobs(args.networks, args.arms, args.runs)
         if not (job_dir(out, *job[:2], job[2]) / "result.json").exists()
@@ -473,6 +513,10 @@ def main():
             command.add_argument("--schedule", default="pilot", choices=SCHEDULES)
         if name == "status":
             command.add_argument("--runs", action="store_true", help="also list every run")
+        if name in ("launch", "calibrate"):
+            command.add_argument("--calibration-samples", type=int, default=CALIBRATION_SAMPLES)
+        if name == "calibrate":
+            command.add_argument("--workers", type=int, default=1)
         if name in ("run-one", "calibrate"):
             command.add_argument("--network", required=True, choices=NETWORKS)
         if name == "run-one":
@@ -487,7 +531,7 @@ def main():
     elif args.command == "report":
         report(args)
     elif args.command == "calibrate":
-        calibrate(args.out, args.network)
+        calibrate(args.out, args.network, args.calibration_samples, args.workers)
     else:
         run_one(args.out, args.network, args.arm, args.seed_index, args.schedule)
 
