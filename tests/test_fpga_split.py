@@ -38,7 +38,7 @@ from system.utils.WorkloadMapping import initial_workload_mapping
 
 FREQUENCY_HZ = 300000000
 GRAPH = Path("cfg/examples/atlas/dense_layernorm.graph_dump.json")
-PROFILE = Path("cfg/profiles/atlas_modular_layernorm_v1.json")
+PROFILE = Path("cfg/profiles/atlas_multi_fpga_layernorm_v1.json")
 ARCHITECTURE = Path("cfg/examples/sa_fpga_architecture.json")
 SEARCH_SPACE = Path("cfg/experiments/atlas_modular_search_space_placeholders.json")
 CACHE_COLUMNS = [
