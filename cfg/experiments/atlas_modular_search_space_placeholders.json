@@ -32,7 +32,7 @@
     "192x192": [2048, 4096, 6144, 8192]
   },
   "fpga": {
-    "count": [1],
+    "count": [1, 2],
     "boards": ["pynq-z2", "zcu102", "alveo-u200", "alveo-u250"],
     "frequency_hz": [200000000, 300000000, 400000000],
     "input_buffer_blocks": [1, 2, 4, 8, 16, 32, 64],
