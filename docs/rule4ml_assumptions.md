@@ -321,6 +321,28 @@ All values are 8-bit (project rule, 2026-10-25). `p` is the number of BRAM block
   The 912 is from memory of the device data sheet, not checked.
 - The 7 series (pynq-z2) and UltraScale+ (zcu102, alveo) boards have the same SDP widths.
 
+### Per-chiplet resource check (CarbonPATH addition, 2026-10-26)
+
+`check_resources_fit` rejects one operation that needs more than its chiplet offers. `check_chiplet_resources`
+(`system/utils/ChipletResourceCheck.py`) rejects a graph whose operations need more than one chiplet offers
+**together**. It runs at the end of `evaluate_atlas_graph` and raises `ResourceExceeded`.
+
+| Resource | How the operations of one chiplet combine |
+| --- | --- |
+| LUT, FF, DSP | add up (one kernel for each operation) |
+| BRAM of the kernels | add up |
+| BRAM of the input buffer | counts once, as the largest buffer of the operations |
+| Total BRAM | kernels + buffer |
+
+- No partial reconfiguration: the bitstream holds the kernels of all operations on the chiplet at the same time, and every
+  block is wired to one kernel. Two operations of the same type and shape are two kernels.
+- Operations do not run at the same time, so they share the input buffer. It must hold the largest input.
+- An operation split by rows over several chiplets puts one share on each chiplet. Each chiplet counts only its share.
+- Evaluators that report their use: the rule4ml evaluators for ReLU, sigmoid, tanh, and softmax, and the hybrid
+  evaluators that wrap them. The LayerNorm evaluator, the legacy lane-based ReLU, and the placeholder evaluators report
+  nothing, so the check does not count them.
+- The check is a hard limit on the predicted values. It does not allow for the Rule4ML error (caveat 11).
+
 ## Caveats for CarbonPATH
 
 | # | Caveat | Ignore? |
@@ -341,6 +363,7 @@ All values are 8-bit (project rule, 2026-10-25). `p` is the number of BRAM block
 | 14 | Latency comes from the C synthesis report (average of min and max cycles). Resources come from logic synthesis. No simulation, no place-and-route. | open |
 | 15 | Rule4ML says nothing about a GEMM done on a systolic array; it was never trained on one | open |
 | 16 | Rule4ML does not count the storage that holds the input. CarbonPATH adds an input buffer (see "Input buffer"). The evidence is indirect: no synthesis report. | open |
+| 18 | The per-chiplet check assumes the resources of the kernels add up. No synthesis of two kernels in one design supports this. A real flow can share logic or lose some in packing. | open |
 | 17 | Rule4ML takes `ap_fixed<W, I>` only. Every CarbonPATH value is 8-bit, so the evaluator reads any declared width other than 8 as `ap_fixed<8, 3>`. | open |
 
 ## Not verified

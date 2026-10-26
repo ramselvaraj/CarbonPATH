@@ -249,7 +249,16 @@ supported for ATLAS graphs.
 - One linear chain; no branches, joins, or residuals.
 - Constant-weight GEMM only.
 - Whole-tensor movement only; no streaming or tiling across FPGA endpoints.
-- One SA endpoint and one FPGA endpoint.
+- A workload mapping can use several SAs and several FPGA chiplets. An operation on FPGA chiplets splits **by rows**
+  (`system/utils/FpgaSplit.py`): the rows divide in blocks that differ by at most one row, the chiplets run at the same
+  time, the latency is the slowest chiplet, and the energy is the sum. Each chiplet has its own constants, buffer, and
+  resource check. A split needs a distributed movement policy (`distributed_activation_boundary_v2`): each chiplet gets the
+  rows it owns from the SAs and sends them on directly. The loads of the constants share the DRAM and run one after
+  the other. The annealing moves are `fpga_count` (add or remove a chiplet; a new chiplet joins no operation) and
+  `fpga_set` (add or remove a chiplet from one operation). The search spaces list `fpga.count: [1]`; set a longer list
+  to turn the count move on.
+- The per-chiplet resource check adds up the kernels of all operations on one FPGA chiplet and counts the input
+  buffer once (`system/utils/ChipletResourceCheck.py`). See `docs/rule4ml_assumptions.md`.
 - ReLU and Softmax are the only non-GEMM operation types.
 - The HLS ReLU and Softmax evaluators are placeholders, not measured hardware
   models.
