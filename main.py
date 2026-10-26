@@ -77,6 +77,7 @@ from system.utils.FpgaActivationMovement import register_fpga_activation_movemen
 from system.utils.FusedActivation import fusion_types, register_fused_activation
 from system.utils.FpgaLayerNorm import register_layernorm_evaluators
 from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
+from system.utils.FpgaSplitPolicy import build_split_policy
 from system.utils.TensorMovement import MovementRequest, build_movement_service
 from system.utils.TransferEstimator import build_transfer_cost_model
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
@@ -612,6 +613,7 @@ def evaluate_atlas_graph(
         else None
     )
     transfer_cost_model = build_transfer_cost_model(profile.transfer_model)
+    split_policy = build_split_policy(profile.fpga_split_policy)
     movement_services = {}
 
     def movement_service_for(handoff_index):
@@ -668,6 +670,7 @@ def evaluate_atlas_graph(
             evaluator_settings=evaluator_settings,
             activation_from_dram=provisional_access.activation_from_dram,
             output_to_dram=provisional_access.output_to_dram,
+            split_policy=split_policy,
         )
         prepared = binding.prepare(operation, provisional_access, assignment, context)
         planned.append(
@@ -709,6 +712,7 @@ def evaluate_atlas_graph(
                 consumer_prepared=consumer["prepared"],
                 system=system,
                 transfer_model=transfer_model,
+                split_policy=split_policy,
             )
         )
 

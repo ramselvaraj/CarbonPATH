@@ -49,6 +49,8 @@ class EvaluationContext:
     # Time the endpoint is idle before this operation, available to hide a
     # parameter load. The executor sets it from the previous operation.
     prefetch_slack_ns: float = 0.0
+    # The FPGA split policy of the evaluation profile; None means the default.
+    split_policy: object = None
 
 
 class OperationInputAdapter:

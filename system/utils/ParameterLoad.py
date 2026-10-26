@@ -47,16 +47,18 @@ class ParameterLoad:
         return self.raw_latency_ns - self.exposed_latency_ns
 
 
-def combine_parameter_loads(loads, slack_ns=0.0):
+def combine_parameter_loads(loads, slack_ns=0.0, shared_dram=True):
     """One load that stands for the loads of several FPGA chiplets.
 
     The chiplets of a split operation each load their own copy of the
-    constants. The loads share the DRAM, so they run one after the other: the
-    raw latencies add. The idle time before the operation hides the sum once.
-    The bytes and the energy add.
+    constants. With ``shared_dram`` the loads share the DRAM, so they run one
+    after the other: the raw latencies add. Without it each load has its own
+    path and they overlap: the longest load counts. The idle time before the
+    operation hides the result once. The bytes and the energy add.
     """
     loads = tuple(loads)
-    raw_latency_ns = sum(load.raw_latency_ns for load in loads)
+    latencies = [load.raw_latency_ns for load in loads]
+    raw_latency_ns = sum(latencies) if shared_dram else max(latencies)
     sources = {load.source_endpoint for load in loads}
     return ParameterLoad(
         byte_count=sum(load.byte_count for load in loads),

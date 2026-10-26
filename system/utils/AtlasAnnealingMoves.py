@@ -32,6 +32,7 @@ from system.utils.ArchitectureIdentity import (
     canonical_chiplet_labels,
     canonicalize_chiplet_labels,
 )
+from system.utils.FpgaNewChiplet import new_fpga_chiplet
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from system.utils.WorkloadMapping import (
     FUSED_ACTIVATION_POLICY,
@@ -351,22 +352,8 @@ def _fpga_count_options(params):
 
 
 def _new_fpga_chiplet(moved, endpoints, params, rng):
-    """A new FPGA chiplet: a copy of an existing one, else a draw from the search space."""
-    if endpoints.fpga_keys:
-        return copy.deepcopy(moved[rng.choice(endpoints.fpga_keys)])
-    fpga_space = params["fpga"]
-    chiplet = {
-        "chiplet_type": "fpga",
-        "tech_node": str(rng.choice(params["tech_nodes"])),
-        "frequency_hz": rng.choice(fpga_space["frequency_hz"]),
-        "relu_implementation": copy.deepcopy(
-            rng.choice(fpga_space["relu_implementation"])
-        ),
-        **board_chiplet_fields(rng.choice(fpga_space["boards"])),
-    }
-    if fpga_space.get("input_buffer_blocks"):
-        chiplet["input_buffer_blocks"] = rng.choice(fpga_space["input_buffer_blocks"])
-    return chiplet
+    """A new FPGA chiplet, built by the policy of ``fpga.new_chiplet``."""
+    return new_fpga_chiplet(moved, endpoints.fpga_keys, params, rng)
 
 
 def _mutate_fpga_count(architecture, mapping, endpoints, params, rng):

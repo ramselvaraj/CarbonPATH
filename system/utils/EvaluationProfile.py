@@ -8,11 +8,12 @@ settings owned by that evaluator. Hardware values remain in the architecture.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
 
+from system.utils.FpgaSplitPolicy import DEFAULT_SPLIT_POLICY
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
 
@@ -46,19 +47,23 @@ class EvaluationProfile:
     assignment_policy: str
     movement_policy: str
     transfer_model: str
+    # How an FPGA operation splits over several chiplets. A profile that does
+    # not name it gets the default and keeps its fingerprint.
+    fpga_split_policy: str = DEFAULT_SPLIT_POLICY
 
     def with_movement_policy(self, movement_policy):
         """Return the same model selection with a different movement policy."""
         if not isinstance(movement_policy, str) or not movement_policy:
             raise UnsupportedEvaluation("evaluation profile movement_policy must be a string")
-        return EvaluationProfile(
-            name=self.name,
-            version=self.version,
-            evaluators=self.evaluators,
-            assignment_policy=self.assignment_policy,
-            movement_policy=movement_policy,
-            transfer_model=self.transfer_model,
-        )
+        return replace(self, movement_policy=movement_policy)
+
+    def with_fpga_split_policy(self, fpga_split_policy):
+        """Return the same model selection with a different FPGA split policy."""
+        if not isinstance(fpga_split_policy, str) or not fpga_split_policy:
+            raise UnsupportedEvaluation(
+                "evaluation profile fpga_split_policy must be a string"
+            )
+        return replace(self, fpga_split_policy=fpga_split_policy)
 
     def with_evaluator_setting(self, operation_type, setting, value):
         """Return a profile copy with one evaluator-owned setting replaced."""
@@ -76,14 +81,7 @@ class EvaluationProfile:
             evaluator_id=current.evaluator_id,
             settings=settings,
         )
-        return EvaluationProfile(
-            name=self.name,
-            version=self.version,
-            evaluators=evaluators,
-            assignment_policy=self.assignment_policy,
-            movement_policy=self.movement_policy,
-            transfer_model=self.transfer_model,
-        )
+        return replace(self, evaluators=evaluators)
 
     def evaluator_id_for(self, operation_type):
         try:
@@ -104,7 +102,7 @@ class EvaluationProfile:
             )
 
     def canonical_dict(self):
-        return {
+        value = {
             "profile": self.name,
             "version": self.version,
             "evaluators": {
@@ -115,6 +113,9 @@ class EvaluationProfile:
             "movement_policy": self.movement_policy,
             "transfer_model": self.transfer_model,
         }
+        if self.fpga_split_policy != DEFAULT_SPLIT_POLICY:
+            value["fpga_split_policy"] = self.fpga_split_policy
+        return value
 
     def fingerprint(self):
         serialized = json.dumps(
@@ -169,6 +170,11 @@ def parse_evaluation_profile(entry):
         value = entry.get(field)
         if not isinstance(value, str) or not value:
             raise UnsupportedEvaluation(f"evaluation profile {field} must be a string")
+    split_policy = entry.get("fpga_split_policy", DEFAULT_SPLIT_POLICY)
+    if not isinstance(split_policy, str) or not split_policy:
+        raise UnsupportedEvaluation(
+            "evaluation profile fpga_split_policy must be a string"
+        )
     return EvaluationProfile(
         name=name,
         version=version,
@@ -176,6 +182,7 @@ def parse_evaluation_profile(entry):
         assignment_policy=entry["assignment_policy"],
         movement_policy=entry["movement_policy"],
         transfer_model=entry["transfer_model"],
+        fpga_split_policy=split_policy,
     )
 
 

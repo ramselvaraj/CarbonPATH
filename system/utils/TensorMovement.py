@@ -78,6 +78,8 @@ class MovementRequest:
     consumer_prepared: object
     system: object
     transfer_model: dict
+    # The FPGA split policy of the evaluation profile; None means the default.
+    split_policy: object = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,7 @@ def _fpga_row_blocks(request, assignment, operation):
         getattr(operation, "operation_id", "operation"),
         request.tensor_shape[0],
         assignment.endpoint_ids,
+        request.split_policy,
     )
 
 
