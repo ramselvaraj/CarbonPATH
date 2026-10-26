@@ -75,8 +75,15 @@ NETWORKS = {
         "cfg/examples/atlas/dense_rule4ml_activations.graph_dump.json"
     ),
 }
-# Allowed FPGA chiplet counts of each arm.
-ARMS = {"A": [1], "B": [1, 2], "C": [1, 2, 3]}
+# Each arm names the allowed FPGA chiplet counts and the policy for a new chiplet.
+# A new chiplet is a copy of an existing one, or is drawn from the search space
+# (so it can be a small board).
+ARMS = {
+    "A": {"count": [1], "new_chiplet": "copy_existing_v1"},
+    "B": {"count": [1, 2], "new_chiplet": "copy_existing_v1"},
+    "C": {"count": [1, 2, 3], "new_chiplet": "copy_existing_v1"},
+    "D": {"count": [1, 2, 3], "new_chiplet": "from_search_space_v1"},
+}
 PROFILE = Path("cfg/profiles/rule4ml_fpga_ops_v3.json")
 SEARCH_SPACE = Path("cfg/experiments/atlas_modular_search_space.json")
 LEGACY_SPACE = Path("cfg/parameters/input.json")
@@ -127,7 +134,8 @@ def initial_architecture(seed, space):
 
 def arm_space(arm):
     space = load_json(SEARCH_SPACE)
-    space["fpga"]["count"] = list(ARMS[arm])
+    space["fpga"]["count"] = list(ARMS[arm]["count"])
+    space["fpga"]["new_chiplet"] = ARMS[arm]["new_chiplet"]
     return space
 
 
@@ -406,6 +414,13 @@ def status(args):
                   f"errors {row.get('evaluation_error')}  (updated {age:.0f}s ago)")
 
 
+def markdown_table(frame):
+    header = "| " + " | ".join(frame.columns) + " |"
+    rule = "|" + "|".join("---" for _ in frame.columns) + "|"
+    body = ["| " + " | ".join(str(value) for value in row) + " |" for row in frame.itertuples(index=False)]
+    return "\n".join([header, rule, *body])
+
+
 def report(args):
     runs = read_runs(args.out)
     done = runs[runs["state"] == "done"]
@@ -438,7 +453,7 @@ def report(args):
         f"Objective `{manifest['objective']}` (latency, energy, area; no dollar cost, no carbon). "
         f"Schedule `{manifest['schedule']}` ({manifest['planned_moves']} moves). "
         f"Arms: {manifest['arms']}.", "",
-        summary.round(4).to_markdown(index=False), "",
+        markdown_table(summary.round(4)), "",
     ]
     (Path(args.out) / "report.md").write_text("\n".join(lines))
     print("\n".join(lines))
