@@ -255,8 +255,9 @@ supported for ATLAS graphs.
   resource check. A split needs a distributed movement policy (`distributed_activation_boundary_v2`): each chiplet gets the
   rows it owns from the SAs and sends them on directly. The loads of the constants share the DRAM and run one after
   the other. The annealing moves are `fpga_count` (add or remove a chiplet; a new chiplet joins no operation) and
-  `fpga_set` (add or remove a chiplet from one operation). The search spaces list `fpga.count: [1]`; set a longer list
-  to turn the count move on.
+  `fpga_set` (add or remove a chiplet from one operation). The full search space lists `fpga.count: [1, 2]`; the placeholder and single
+  spaces list `[1]`, so the count move is off there. A split needs the profile with `distributed_activation_boundary_v2`;
+  with an older movement policy the split points are rejected.
 - The per-chiplet resource check adds up the kernels of all operations on one FPGA chiplet and counts the input
   buffer once (`system/utils/ChipletResourceCheck.py`). See `docs/rule4ml_assumptions.md`.
 - ReLU and Softmax are the only non-GEMM operation types.
