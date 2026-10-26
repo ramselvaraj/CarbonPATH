@@ -87,6 +87,13 @@ ARMS = {
 }
 PROFILE = Path("cfg/profiles/rule4ml_fpga_ops_v3.json")
 SEARCH_SPACE = Path("cfg/experiments/atlas_modular_search_space.json")
+# A suite names its networks and its search space. ``--suite`` selects one.
+LARGE_NETWORKS = {
+    "wide_k_mlp": Path("cfg/examples/atlas/wide_k_mlp.graph_dump.json"),
+    "row_split": Path("cfg/examples/atlas/row_split.graph_dump.json"),
+}
+LARGE_SEARCH_SPACE = Path("cfg/experiments/atlas_large_search_space.json")
+SUITES = ("small", "large")
 LEGACY_SPACE = Path("cfg/parameters/input.json")
 OBJECTIVE = "t5"
 INITIAL_SEED_BASE = 12000
@@ -109,6 +116,15 @@ SCHEDULES = {
         "cooling_rate": 0.5,
     },
 }
+
+
+def apply_suite(suite):
+    """Point the module at the networks and the search space of ``suite``."""
+    global SEARCH_SPACE
+    if suite == "large":
+        NETWORKS.clear()
+        NETWORKS.update(LARGE_NETWORKS)
+        SEARCH_SPACE = LARGE_SEARCH_SPACE
 
 
 def planned_moves(schedule):
@@ -407,7 +423,8 @@ def launch(args):
             process = subprocess.Popen(
                 [sys.executable, "-W", "ignore", "-m", "script.run_fpga_campaign",
                  "run-one", "--out", str(out), "--network", network, "--arm", arm,
-                 "--seed-index", str(k), "--schedule", args.schedule],
+                 "--seed-index", str(k), "--schedule", args.schedule,
+                 "--suite", args.suite],
                 stdout=(directory / "proc.log").open("w"), stderr=subprocess.STDOUT,
             )
             running[job] = process
@@ -500,13 +517,15 @@ def report(args):
 
 
 def main():
+    ALL_NETWORKS = {**NETWORKS, **LARGE_NETWORKS}
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("launch", "status", "report", "run-one", "calibrate"):
         command = sub.add_parser(name)
         command.add_argument("--out", required=True)
+        command.add_argument("--suite", default="small", choices=SUITES)
         if name == "launch":
-            command.add_argument("--networks", nargs="+", default=list(NETWORKS), choices=NETWORKS)
+            command.add_argument("--networks", nargs="+", default=None, choices=ALL_NETWORKS)
             command.add_argument("--arms", nargs="+", default=list(ARMS), choices=ARMS)
             command.add_argument("--runs", type=int, default=10)
             command.add_argument("--workers", type=int, default=10)
@@ -518,12 +537,15 @@ def main():
         if name == "calibrate":
             command.add_argument("--workers", type=int, default=1)
         if name in ("run-one", "calibrate"):
-            command.add_argument("--network", required=True, choices=NETWORKS)
+            command.add_argument("--network", required=True, choices=ALL_NETWORKS)
         if name == "run-one":
             command.add_argument("--arm", required=True, choices=ARMS)
             command.add_argument("--seed-index", type=int, required=True)
             command.add_argument("--schedule", required=True, choices=SCHEDULES)
     args = parser.parse_args()
+    apply_suite(args.suite)
+    if args.command == "launch" and args.networks is None:
+        args.networks = list(NETWORKS)
     if args.command == "launch":
         launch(args)
     elif args.command == "status":

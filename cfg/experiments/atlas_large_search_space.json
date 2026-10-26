@@ -1,0 +1,165 @@
+{
+  "max_sa_chiplets": 6,
+  "move_weights": {
+    "sa_count": 1.0,
+    "sa_array": 1.0,
+    "sa_tech_node": 1.0,
+    "sa_sram": 1.0,
+    "gemm_dataflow": 1.0,
+    "gemm_split_k": 1.0,
+    "gemm_assignment_order": 1.0,
+    "gemm_merge_tiles": 1.0,
+    "gemm_sa_set": 1.0,
+    "handoff_movement": 1.0,
+    "relu_fusion": 1.0,
+    "fpga_count": 1.0,
+    "fpga_set": 1.0,
+    "fpga_board": 1.0,
+    "fpga_frequency": 1.0,
+    "fpga_relu": 1.0,
+    "fpga_input_buffer": 1.0,
+    "mem_type": 1.0,
+    "interconnect": 1.0,
+    "protocol": 1.0,
+    "transfer_model": 1.0
+  },
+  "sys_array": [
+    "32x32",
+    "64x64",
+    "96x96",
+    "128x128",
+    "192x192"
+  ],
+  "tech_nodes": [
+    "7",
+    "10",
+    "14"
+  ],
+  "sram_buf_sizes": {
+    "32x32": [
+      256,
+      512
+    ],
+    "64x64": [
+      256,
+      512,
+      768,
+      1024
+    ],
+    "96x96": [
+      512,
+      1024,
+      1536,
+      2048
+    ],
+    "128x128": [
+      1024,
+      2048,
+      3072,
+      4096
+    ],
+    "192x192": [
+      2048,
+      4096,
+      6144,
+      8192
+    ]
+  },
+  "fpga": {
+    "count": [
+      1,
+      2,
+      3
+    ],
+    "boards": [
+      "pynq-z2",
+      "zcu102",
+      "alveo-u200",
+      "alveo-u250"
+    ],
+    "frequency_hz": [
+      200000000,
+      300000000,
+      400000000
+    ],
+    "input_buffer_blocks": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "relu_implementation": [
+      {
+        "clbs_per_lane": 5,
+        "brams_per_lane": 0,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 64,
+        "energy_per_element_pj": null
+      },
+      {
+        "clbs_per_lane": 2,
+        "brams_per_lane": 0,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 128,
+        "energy_per_element_pj": 0.1
+      },
+      {
+        "clbs_per_lane": 10,
+        "brams_per_lane": 1,
+        "dsps_per_lane": 0,
+        "max_parallel_lanes": 32,
+        "energy_per_element_pj": null
+      }
+    ]
+  },
+  "pkg": {
+    "package_types": [
+      "2.5d",
+      "3d",
+      "2.5d_3d"
+    ],
+    "inter_pkg_architecture": [
+      "2d_na",
+      "2.5d_emib",
+      "2.5d_rdl",
+      "3d_tsv",
+      "3d_u_bump",
+      "3d_hyb_bond"
+    ],
+    "protocol": [
+      "ucie_std",
+      "ucie_adv",
+      "aib",
+      "bow",
+      "ucie_3d"
+    ],
+    "mem_pkg_architecture": [
+      "ddr4",
+      "ddr5",
+      "hbm2",
+      "hbm3"
+    ]
+  },
+  "transfer_model": [
+    {
+      "setup_latency_ns": 5.0,
+      "hop_latency_ns": 1.0
+    }
+  ],
+  "gemm_mapping": {
+    "merge_tiles": [
+      false
+    ]
+  },
+  "movement_policy": {
+    "sa_to_sa": [
+      "direct_forward_v1",
+      "local_sram_v1",
+      "cold_dram_v1"
+    ]
+  },
+  "_note": "Large-network suite. Adds a 32x32 array whose 7 nm area and power are a quarter of 64x64 (an extrapolation, not a synthesis result) and allows up to 3 FPGA chiplets."
+}
