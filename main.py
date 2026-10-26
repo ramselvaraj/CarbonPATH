@@ -593,7 +593,13 @@ def evaluate_atlas_graph(
         else arch_dict.get("transfer_model", {})
     )
     system = ChipletSystem(arch_dict=arch_dict, BASE_FREQUENCY=FREQUENCY)
-    assignment_policy = build_assignment_policy(profile.assignment_policy, system)
+    # The policy places operations only when no workload mapping is given. A
+    # mapping names its endpoints, so it can use any number of FPGA chiplets.
+    assignment_policy = (
+        build_assignment_policy(profile.assignment_policy, system)
+        if mapping is None
+        else None
+    )
     transfer_cost_model = build_transfer_cost_model(profile.transfer_model)
     movement_services = {}
 
