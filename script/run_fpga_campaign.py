@@ -64,8 +64,12 @@ from system.utils.FpgaNewChiplet import new_fpga_chiplet
 from system.utils.SimulationCache import SimulationCache
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
+# dense_relu_funnel and dense_relu_deep are left out: their ReLU tensors have
+# 131,072 values or more, far beyond the sizes Rule4ML was trained on, and the
+# input buffer would need at least 57 BRAM blocks. Every random design is
+# rejected, so the search has no valid start.
 NETWORKS = {
-    "relu_funnel": Path("cfg/examples/atlas/dense_relu_funnel.graph_dump.json"),
+    "softmax_only": Path("cfg/examples/atlas/dense_softmax.graph_dump.json"),
     "relu_softmax": Path("cfg/examples/atlas/dense_relu_softmax.graph_dump.json"),
     "all_activations": Path(
         "cfg/examples/atlas/dense_rule4ml_activations.graph_dump.json"
