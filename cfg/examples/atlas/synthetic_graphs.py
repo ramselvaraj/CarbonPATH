@@ -5,11 +5,12 @@ The Keras/HGQ2 flow is not needed: each layer copies the schema of a layer in
 ``dense_rule4ml_activations.graph_dump.json`` and changes names, shapes and sizes.
 The C++ configuration strings are dropped; CarbonPATH does not read them.
 
-    wide_k_mlp   M=32 rows. Two feed-forward blocks (64 -> 1024 -> relu -> 64) make
-                 the GEMMs large (K up to 1024). The 1024-wide ReLU tensors hold
-                 32768 values, far above Rule4ML's trained range of 1024; the sweep
-                 shows ReLU stays cheap there. Sigmoid, tanh and softmax tensors
-                 hold at most 2048 values.
+    wide_k_mlp   M=4 rows. Two feed-forward blocks (64 -> 1024 -> relu -> 64) make
+                 the GEMMs wide (K and N up to 1024). The ReLU tensors hold 4096
+                 values, 4x Rule4ML's trained range of 1024. The sweep shows the FF
+                 use of an activation climbs steeply above 4096 values, so tensors
+                 must stay at or below that size. Sigmoid, tanh and softmax tensors
+                 hold at most 256 values.
     row_split    M=128 rows and narrow layers. Each activation tensor has 2048
                  values (softmax 2048), so a row split over FPGA chiplets halves it.
 
@@ -94,7 +95,7 @@ ROW_SPLIT = [
 
 if __name__ == "__main__":
     for file_name, spec, m in (
-        ("wide_k_mlp", WIDE_K_MLP, 32),
+        ("wide_k_mlp", WIDE_K_MLP, 4),
         ("row_split", ROW_SPLIT, 128),
     ):
         layers = build(spec, m)
