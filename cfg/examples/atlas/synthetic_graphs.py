@@ -5,9 +5,11 @@ The Keras/HGQ2 flow is not needed: each layer copies the schema of a layer in
 ``dense_rule4ml_activations.graph_dump.json`` and changes names, shapes and sizes.
 The C++ configuration strings are dropped; CarbonPATH does not read them.
 
-    wide_k_mlp   M=32 rows. Linear up/down projections with K up to 1024 make the
-                 GEMMs large, while every FPGA activation tensor stays within the
-                 sizes of docs/rule4ml_board_dimension_sweep.csv (at most 2048).
+    wide_k_mlp   M=32 rows. Two feed-forward blocks (64 -> 1024 -> relu -> 64) make
+                 the GEMMs large (K up to 1024). The 1024-wide ReLU tensors hold
+                 32768 values, far above Rule4ML's trained range of 1024; the sweep
+                 shows ReLU stays cheap there. Sigmoid, tanh and softmax tensors
+                 hold at most 2048 values.
     row_split    M=128 rows and narrow layers. Each activation tensor has 2048
                  values (softmax 2048), so a row split over FPGA chiplets halves it.
 
@@ -75,12 +77,11 @@ def build(spec, m):
 
 # (name, N, activation, K) -- K of the first layer sets the input width.
 WIDE_K_MLP = [
-    ("stem", 64, "relu", 512),
-    ("up", 1024, None, None),
-    ("down", 64, "sigmoid", None),
-    ("mix", 64, "tanh", None),
-    ("up2", 1024, None, None),
-    ("down2", 32, "softmax", None),
+    ("up1", 1024, "relu", 64),
+    ("down1", 64, "sigmoid", None),
+    ("up2", 1024, "relu", None),
+    ("down2", 64, "tanh", None),
+    ("score", 32, "softmax", None),
     ("head", 16, None, None),
 ]
 ROW_SPLIT = [

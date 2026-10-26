@@ -13,7 +13,7 @@
   "output": {
    "shape": [
     32,
-    512
+    64
    ],
    "precision": "fixed<9,3,RND,WRAP,0>"
   },
@@ -25,7 +25,7 @@
    "input_keras_tensor_names": [],
    "input_shape": [
     32,
-    512
+    64
    ],
    "output_keras_tensor_names": [
     "keras_tensor"
@@ -41,14 +41,14 @@
  },
  {
   "index": 2,
-  "name": "gemm_stem",
+  "name": "gemm_up1",
   "class": "Gemm",
   "inputs": [
    {
     "name": "input_layer",
     "shape": [
      32,
-     512
+     64
     ],
     "precision": "fixed<9,3,RND,WRAP,0>"
    }
@@ -56,7 +56,7 @@
   "output": {
    "shape": [
     32,
-    64
+    1024
    ],
    "precision": "fixed<13,6,TRN,WRAP,0>"
   },
@@ -64,8 +64,8 @@
    {
     "name": "weight2",
     "shape": [
-     64,
-     512
+     1024,
+     64
     ],
     "precision": "fixed<7,1,TRN,WRAP,0>",
     "nzeros": "4"
@@ -73,15 +73,15 @@
    {
     "name": "bias2",
     "shape": [
-     64
+     1024
     ],
     "precision": "ufixed<2,32,TRN,WRAP,0>",
     "nzeros": "16"
    }
   ],
   "attrs": {
-   "n_in": 512,
-   "n_out": 64,
+   "n_in": 64,
+   "n_out": 1024,
    "n_patches": 32,
    "gemm_m": 32,
    "weights_in_core": true,
@@ -90,7 +90,7 @@
    "_original_type": "Dense",
    "_gemm_output_shape": [
     32,
-    64
+    1024
    ],
    "has_bias": false,
    "strategy": "gemm",
@@ -109,14 +109,14 @@
  },
  {
   "index": 3,
-  "name": "stem_relu",
+  "name": "up1_relu",
   "class": "Activation",
   "inputs": [
    {
-    "name": "stem",
+    "name": "up1",
     "shape": [
      32,
-     64
+     1024
     ],
     "precision": "fixed<13,6,TRN,WRAP,0>"
    }
@@ -124,13 +124,13 @@
   "output": {
    "shape": [
     32,
-    64
+    1024
    ],
    "precision": "fixed<9,3,RND,WRAP,0>"
   },
   "weights": [],
   "attrs": {
-   "name": "stem_relu",
+   "name": "up1_relu",
    "class_name": "Activation",
    "module": "keras.src.layers.activations.activation",
    "input_keras_tensor_names": [
@@ -140,9 +140,9 @@
     "keras_tensor_2"
    ],
    "activation": "relu",
-   "n_in": 2048,
+   "n_in": 32768,
    "inputs": [
-    "stem"
+    "up1"
    ],
    "index": 3,
    "trace": false,
@@ -155,14 +155,14 @@
  },
  {
   "index": 4,
-  "name": "gemm_up",
+  "name": "gemm_down1",
   "class": "Gemm",
   "inputs": [
    {
-    "name": "stem_relu",
+    "name": "up1_relu",
     "shape": [
      32,
-     64
+     1024
     ],
     "precision": "fixed<9,3,RND,WRAP,0>"
    }
@@ -170,7 +170,7 @@
   "output": {
    "shape": [
     32,
-    1024
+    64
    ],
    "precision": "fixed<13,6,TRN,WRAP,0>"
   },
@@ -178,8 +178,8 @@
    {
     "name": "weight4",
     "shape": [
-     1024,
-     64
+     64,
+     1024
     ],
     "precision": "fixed<7,1,TRN,WRAP,0>",
     "nzeros": "4"
@@ -187,15 +187,15 @@
    {
     "name": "bias4",
     "shape": [
-     1024
+     64
     ],
     "precision": "ufixed<2,32,TRN,WRAP,0>",
     "nzeros": "16"
    }
   ],
   "attrs": {
-   "n_in": 64,
-   "n_out": 1024,
+   "n_in": 1024,
+   "n_out": 64,
    "n_patches": 32,
    "gemm_m": 32,
    "weights_in_core": true,
@@ -204,7 +204,7 @@
    "_original_type": "Dense",
    "_gemm_output_shape": [
     32,
-    1024
+    64
    ],
    "has_bias": false,
    "strategy": "gemm",
@@ -223,79 +223,11 @@
  },
  {
   "index": 5,
-  "name": "gemm_down",
-  "class": "Gemm",
-  "inputs": [
-   {
-    "name": "up",
-    "shape": [
-     32,
-     1024
-    ],
-    "precision": "fixed<9,3,RND,WRAP,0>"
-   }
-  ],
-  "output": {
-   "shape": [
-    32,
-    64
-   ],
-   "precision": "fixed<13,6,TRN,WRAP,0>"
-  },
-  "weights": [
-   {
-    "name": "weight5",
-    "shape": [
-     64,
-     1024
-    ],
-    "precision": "fixed<7,1,TRN,WRAP,0>",
-    "nzeros": "4"
-   },
-   {
-    "name": "bias5",
-    "shape": [
-     64
-    ],
-    "precision": "ufixed<2,32,TRN,WRAP,0>",
-    "nzeros": "16"
-   }
-  ],
-  "attrs": {
-   "n_in": 1024,
-   "n_out": 64,
-   "n_patches": 32,
-   "gemm_m": 32,
-   "weights_in_core": true,
-   "weight_quantizer": null,
-   "bias_quantizer": null,
-   "_original_type": "Dense",
-   "_gemm_output_shape": [
-    32,
-    64
-   ],
-   "has_bias": false,
-   "strategy": "gemm",
-   "reuse_factor": 1,
-   "parallelization_factor": 1,
-   "target_cycles": null,
-   "sparse": false,
-   "second_operand_row_major": false,
-   "im2col_tile_rows": null,
-   "index": 5,
-   "trace": false,
-   "n_inplace": 1,
-   "_weights_transposed": true,
-   "_weights_transposed_for_gemm": true
-  }
- },
- {
-  "index": 6,
-  "name": "down_sigmoid",
+  "name": "down1_sigmoid",
   "class": "Activation",
   "inputs": [
    {
-    "name": "down",
+    "name": "down1",
     "shape": [
      32,
      64
@@ -312,7 +244,7 @@
   },
   "weights": [],
   "attrs": {
-   "name": "down_sigmoid",
+   "name": "down1_sigmoid",
    "class_name": "Activation",
    "module": "keras.src.layers.activations.activation",
    "input_keras_tensor_names": [
@@ -324,9 +256,9 @@
    "activation": "sigmoid",
    "n_in": 2048,
    "inputs": [
-    "down"
+    "down1"
    ],
-   "index": 6,
+   "index": 5,
    "trace": false,
    "reuse_factor": 1,
    "table_size": 65536,
@@ -336,126 +268,12 @@
   }
  },
  {
-  "index": 7,
-  "name": "gemm_mix",
-  "class": "Gemm",
-  "inputs": [
-   {
-    "name": "down_sigmoid",
-    "shape": [
-     32,
-     64
-    ],
-    "precision": "fixed<9,3,RND,WRAP,0>"
-   }
-  ],
-  "output": {
-   "shape": [
-    32,
-    64
-   ],
-   "precision": "fixed<13,6,TRN,WRAP,0>"
-  },
-  "weights": [
-   {
-    "name": "weight7",
-    "shape": [
-     64,
-     64
-    ],
-    "precision": "fixed<7,1,TRN,WRAP,0>",
-    "nzeros": "4"
-   },
-   {
-    "name": "bias7",
-    "shape": [
-     64
-    ],
-    "precision": "ufixed<2,32,TRN,WRAP,0>",
-    "nzeros": "16"
-   }
-  ],
-  "attrs": {
-   "n_in": 64,
-   "n_out": 64,
-   "n_patches": 32,
-   "gemm_m": 32,
-   "weights_in_core": true,
-   "weight_quantizer": null,
-   "bias_quantizer": null,
-   "_original_type": "Dense",
-   "_gemm_output_shape": [
-    32,
-    64
-   ],
-   "has_bias": false,
-   "strategy": "gemm",
-   "reuse_factor": 1,
-   "parallelization_factor": 1,
-   "target_cycles": null,
-   "sparse": false,
-   "second_operand_row_major": false,
-   "im2col_tile_rows": null,
-   "index": 7,
-   "trace": false,
-   "n_inplace": 1,
-   "_weights_transposed": true,
-   "_weights_transposed_for_gemm": true
-  }
- },
- {
-  "index": 8,
-  "name": "mix_tanh",
-  "class": "Activation",
-  "inputs": [
-   {
-    "name": "mix",
-    "shape": [
-     32,
-     64
-    ],
-    "precision": "fixed<18,6,TRN,WRAP,0>"
-   }
-  ],
-  "output": {
-   "shape": [
-    32,
-    64
-   ],
-   "precision": "fixed<9,3,RND,WRAP,0>"
-  },
-  "weights": [],
-  "attrs": {
-   "name": "mix_tanh",
-   "class_name": "Activation",
-   "module": "keras.src.layers.activations.activation",
-   "input_keras_tensor_names": [
-    "keras_tensor_5"
-   ],
-   "output_keras_tensor_names": [
-    "keras_tensor_6"
-   ],
-   "activation": "tanh",
-   "n_in": 2048,
-   "inputs": [
-    "mix"
-   ],
-   "index": 8,
-   "trace": false,
-   "reuse_factor": 1,
-   "table_size": 32768,
-   "bit_exact_transformed": true,
-   "_result_t_propagated": true,
-   "target_cycles": null
-  }
- },
- {
-  "index": 9,
+  "index": 6,
   "name": "gemm_up2",
   "class": "Gemm",
   "inputs": [
    {
-    "name": "mix_tanh",
+    "name": "down1_sigmoid",
     "shape": [
      32,
      64
@@ -472,7 +290,7 @@
   },
   "weights": [
    {
-    "name": "weight9",
+    "name": "weight6",
     "shape": [
      1024,
      64
@@ -481,7 +299,7 @@
     "nzeros": "4"
    },
    {
-    "name": "bias9",
+    "name": "bias6",
     "shape": [
      1024
     ],
@@ -510,7 +328,7 @@
    "sparse": false,
    "second_operand_row_major": false,
    "im2col_tile_rows": null,
-   "index": 9,
+   "index": 6,
    "trace": false,
    "n_inplace": 1,
    "_weights_transposed": true,
@@ -518,15 +336,175 @@
   }
  },
  {
-  "index": 10,
-  "name": "gemm_down2",
-  "class": "Gemm",
+  "index": 7,
+  "name": "up2_relu",
+  "class": "Activation",
   "inputs": [
    {
     "name": "up2",
     "shape": [
      32,
      1024
+    ],
+    "precision": "fixed<13,6,TRN,WRAP,0>"
+   }
+  ],
+  "output": {
+   "shape": [
+    32,
+    1024
+   ],
+   "precision": "fixed<9,3,RND,WRAP,0>"
+  },
+  "weights": [],
+  "attrs": {
+   "name": "up2_relu",
+   "class_name": "Activation",
+   "module": "keras.src.layers.activations.activation",
+   "input_keras_tensor_names": [
+    "keras_tensor_1"
+   ],
+   "output_keras_tensor_names": [
+    "keras_tensor_2"
+   ],
+   "activation": "relu",
+   "n_in": 32768,
+   "inputs": [
+    "up2"
+   ],
+   "index": 7,
+   "trace": false,
+   "reuse_factor": 1,
+   "table_size": 262144,
+   "bit_exact_transformed": true,
+   "_result_t_propagated": true,
+   "target_cycles": null
+  }
+ },
+ {
+  "index": 8,
+  "name": "gemm_down2",
+  "class": "Gemm",
+  "inputs": [
+   {
+    "name": "up2_relu",
+    "shape": [
+     32,
+     1024
+    ],
+    "precision": "fixed<9,3,RND,WRAP,0>"
+   }
+  ],
+  "output": {
+   "shape": [
+    32,
+    64
+   ],
+   "precision": "fixed<13,6,TRN,WRAP,0>"
+  },
+  "weights": [
+   {
+    "name": "weight8",
+    "shape": [
+     64,
+     1024
+    ],
+    "precision": "fixed<7,1,TRN,WRAP,0>",
+    "nzeros": "4"
+   },
+   {
+    "name": "bias8",
+    "shape": [
+     64
+    ],
+    "precision": "ufixed<2,32,TRN,WRAP,0>",
+    "nzeros": "16"
+   }
+  ],
+  "attrs": {
+   "n_in": 1024,
+   "n_out": 64,
+   "n_patches": 32,
+   "gemm_m": 32,
+   "weights_in_core": true,
+   "weight_quantizer": null,
+   "bias_quantizer": null,
+   "_original_type": "Dense",
+   "_gemm_output_shape": [
+    32,
+    64
+   ],
+   "has_bias": false,
+   "strategy": "gemm",
+   "reuse_factor": 1,
+   "parallelization_factor": 1,
+   "target_cycles": null,
+   "sparse": false,
+   "second_operand_row_major": false,
+   "im2col_tile_rows": null,
+   "index": 8,
+   "trace": false,
+   "n_inplace": 1,
+   "_weights_transposed": true,
+   "_weights_transposed_for_gemm": true
+  }
+ },
+ {
+  "index": 9,
+  "name": "down2_tanh",
+  "class": "Activation",
+  "inputs": [
+   {
+    "name": "down2",
+    "shape": [
+     32,
+     64
+    ],
+    "precision": "fixed<18,6,TRN,WRAP,0>"
+   }
+  ],
+  "output": {
+   "shape": [
+    32,
+    64
+   ],
+   "precision": "fixed<9,3,RND,WRAP,0>"
+  },
+  "weights": [],
+  "attrs": {
+   "name": "down2_tanh",
+   "class_name": "Activation",
+   "module": "keras.src.layers.activations.activation",
+   "input_keras_tensor_names": [
+    "keras_tensor_5"
+   ],
+   "output_keras_tensor_names": [
+    "keras_tensor_6"
+   ],
+   "activation": "tanh",
+   "n_in": 2048,
+   "inputs": [
+    "down2"
+   ],
+   "index": 9,
+   "trace": false,
+   "reuse_factor": 1,
+   "table_size": 32768,
+   "bit_exact_transformed": true,
+   "_result_t_propagated": true,
+   "target_cycles": null
+  }
+ },
+ {
+  "index": 10,
+  "name": "gemm_score",
+  "class": "Gemm",
+  "inputs": [
+   {
+    "name": "down2_tanh",
+    "shape": [
+     32,
+     64
     ],
     "precision": "fixed<9,3,RND,WRAP,0>"
    }
@@ -543,7 +521,7 @@
     "name": "weight10",
     "shape": [
      32,
-     1024
+     64
     ],
     "precision": "fixed<7,1,TRN,WRAP,0>",
     "nzeros": "4"
@@ -558,7 +536,7 @@
    }
   ],
   "attrs": {
-   "n_in": 1024,
+   "n_in": 64,
    "n_out": 32,
    "n_patches": 32,
    "gemm_m": 32,
@@ -591,7 +569,7 @@
   "class": "Softmax",
   "inputs": [
    {
-    "name": "down2",
+    "name": "score",
     "shape": [
      32,
      32
@@ -622,7 +600,7 @@
    "n_outer": 8,
    "n_inner": 1,
    "inputs": [
-    "down2"
+    "score"
    ],
    "index": 11,
    "n_in": 1024,
