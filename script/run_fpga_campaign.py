@@ -116,6 +116,13 @@ SCHEDULES = {
         "max_move_per_temp_step": 50,
         "cooling_rate": 0.99,
     },
+    # Same cooling as main.py with 100 moves per level.
+    "long_151300": {
+        "initial_temp": 4000,
+        "freezing_temp": 1e-3,
+        "max_move_per_temp_step": 100,
+        "cooling_rate": 0.99,
+    },
     "pilot": {
         "initial_temp": 8,
         "freezing_temp": 1e-1,
