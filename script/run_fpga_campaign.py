@@ -148,6 +148,12 @@ def apply_suite(suite):
         SEARCH_SPACE = LARGE_SEARCH_SPACE
 
 
+def apply_profile(path):
+    """Evaluate every design with the profile at ``path``."""
+    global PROFILE
+    PROFILE = Path(path)
+
+
 def planned_moves(schedule):
     levels = math.ceil(
         math.log(schedule["freezing_temp"] / schedule["initial_temp"])
@@ -469,7 +475,7 @@ def launch(args):
                 [sys.executable, "-W", "ignore", "-m", "script.run_fpga_campaign",
                  "run-one", "--out", str(out), "--network", network, "--arm", arm,
                  "--seed-index", str(k), "--schedule", args.schedule,
-                 "--suite", args.suite],
+                 "--suite", args.suite, "--profile", args.profile],
                 stdout=(directory / "proc.log").open("w"), stderr=subprocess.STDOUT,
             )
             running[job] = process
@@ -569,6 +575,7 @@ def main():
         command = sub.add_parser(name)
         command.add_argument("--out", required=True)
         command.add_argument("--suite", default="small", choices=SUITES)
+        command.add_argument("--profile", default=str(PROFILE))
         if name == "launch":
             command.add_argument("--networks", nargs="+", default=None, choices=ALL_NETWORKS)
             command.add_argument("--arms", nargs="+", default=list(ARMS), choices=ARMS)
@@ -589,6 +596,7 @@ def main():
             command.add_argument("--schedule", required=True, choices=SCHEDULES)
     args = parser.parse_args()
     apply_suite(args.suite)
+    apply_profile(args.profile)
     if args.command == "launch" and args.networks is None:
         args.networks = list(NETWORKS)
     if args.command == "launch":
