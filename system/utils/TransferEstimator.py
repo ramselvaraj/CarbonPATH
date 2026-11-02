@@ -68,7 +68,7 @@ def _validate_route(route):
 class TransferEstimator:
     """Estimate the latency and energy of moving one int8 tensor over a route."""
 
-    model_id = "route_transfer_v1"
+    model_id = "d2d_transfer_v1"
 
     def estimate(self, request: TransferRequest) -> TransferEstimate:
         if not isinstance(request.tensor_id, str) or not request.tensor_id:
@@ -108,7 +108,11 @@ class TransferEstimator:
         )
 
 
-TRANSFER_COST_MODELS = {TransferEstimator.model_id: TransferEstimator}
+TRANSFER_COST_MODELS = {
+    TransferEstimator.model_id: TransferEstimator,
+    # Old ID of the same model: profiles written before the rename still load.
+    "route_transfer_v1": TransferEstimator,
+}
 
 
 def build_transfer_cost_model(model_id):

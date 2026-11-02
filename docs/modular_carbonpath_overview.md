@@ -73,7 +73,7 @@ Each policy is named in the profile and resolves to one implementation.
 - `movement_policy` — decides how a produced tensor reaches its consumer
   (`activation_boundary_v1`: retain if the same endpoint, else resolve a route).
 - `transfer_model` — computes the latency and energy of one movement over a
-  resolved route (`route_transfer_v1`).
+  resolved route (`d2d_transfer_v1`).
 
 What they look like in the profile:
 
@@ -81,7 +81,7 @@ What they look like in the profile:
 {
   "assignment_policy": "fixed_single_sa_single_fpga_v1",
   "movement_policy": "activation_boundary_v1",
-  "transfer_model": "route_transfer_v1",
+  "transfer_model": "d2d_transfer_v1",
   "evaluators": {
     "gemm": "legacy_scale_sim_gemm_v1",
     "relu": "placeholder_hls_relu_v0",

@@ -147,7 +147,7 @@ ATLAS_PROFILE = {
     },
     "assignment_policy": "fixed_single_sa_single_fpga_v1",
     "movement_policy": "activation_boundary_v1",
-    "transfer_model": "route_transfer_v1",
+    "transfer_model": "d2d_transfer_v1",
 }
 
 

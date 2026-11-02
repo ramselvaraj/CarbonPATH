@@ -64,8 +64,8 @@ EXPECTED_SHAPES = [(128, 128, 1024), (128, 1024, 512), (128, 512, 256), (128, 25
 FUNNEL_FINGERPRINT = "810bd39b27e0"
 SOFTMAX_FINGERPRINT = "88cd5accb4ca"
 MIXED_FIXTURE_FINGERPRINT = "abf1849faedc"
-LEGACY_PROFILE_FINGERPRINT = "b3f4a54992ab"
-PLACEHOLDER_PROFILE_FINGERPRINT = "90ec76a679be"
+LEGACY_PROFILE_FINGERPRINT = "1de6717627b0"
+PLACEHOLDER_PROFILE_FINGERPRINT = "6c8a1b3f4609"
 
 GOLDEN = {
     "latency_ns": 133648.7947773606,
@@ -343,7 +343,7 @@ class EvaluationProfileTests(unittest.TestCase):
                 },
                 "assignment_policy": "fixed_single_sa_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
-                "transfer_model": "route_transfer_v1",
+                "transfer_model": "d2d_transfer_v1",
             }
         )
 
@@ -460,7 +460,7 @@ class RegistryTests(unittest.TestCase):
                 self.assertEqual(service.intermediate_policy, policy)
 
     def test_transfer_cost_model_resolves_by_id(self):
-        model = build_transfer_cost_model("route_transfer_v1")
+        model = build_transfer_cost_model("d2d_transfer_v1")
         self.assertIsInstance(model, TransferEstimator)
 
     def test_unknown_transfer_cost_model_is_unsupported(self):
@@ -587,7 +587,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                 },
                 "assignment_policy": "fixed_single_sa_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
-                "transfer_model": "route_transfer_v1",
+                "transfer_model": "d2d_transfer_v1",
             }
         )
         original_mapping = json.loads(json.dumps(self.architecture["WL_mapping"]))
@@ -629,7 +629,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                 "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
                 "assignment_policy": "all_sas_single_fpga_v1",
                 "movement_policy": "activation_boundary_v1",
-                "transfer_model": "route_transfer_v1",
+                "transfer_model": "d2d_transfer_v1",
             }
         )
         simulated = {
@@ -693,7 +693,7 @@ class AtlasEvaluationTests(unittest.TestCase):
                         "evaluators": {"gemm": "legacy_scale_sim_gemm_v1"},
                         "assignment_policy": "all_sas_single_fpga_v1",
                         "movement_policy": f"{policy}_v1",
-                        "transfer_model": "route_transfer_v1",
+                        "transfer_model": "d2d_transfer_v1",
                     }
                 )
                 prepared = [
