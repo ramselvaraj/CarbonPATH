@@ -5,7 +5,7 @@ The search space names the policy in ``fpga.new_chiplet``. The default is
 
 * ``copy_existing_v1``: a copy of an FPGA chiplet of the package, chosen at
   random. With no FPGA in the package, it builds one from the search space.
-* ``from_search_space_v1``: a chiplet drawn from the search space (board,
+* ``from_search_space_v1``: a chiplet drawn from the search space (part or board,
   frequency, ReLU implementation, input buffer), even when the package already
   has FPGA chiplets.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 
+from system.utils.FpgaParts import part_chiplet_fields
 from system.utils.Rule4MlBoards import board_chiplet_fields
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 
@@ -29,8 +30,11 @@ def _from_search_space(params, rng):
         "relu_implementation": copy.deepcopy(
             rng.choice(fpga_space["relu_implementation"])
         ),
-        **board_chiplet_fields(rng.choice(fpga_space["boards"])),
     }
+    if fpga_space.get("parts"):
+        chiplet.update(part_chiplet_fields(rng.choice(fpga_space["parts"])))
+    else:
+        chiplet.update(board_chiplet_fields(rng.choice(fpga_space["boards"])))
     if fpga_space.get("input_buffer_blocks"):
         chiplet["input_buffer_blocks"] = rng.choice(fpga_space["input_buffer_blocks"])
     return chiplet

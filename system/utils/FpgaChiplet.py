@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from system.utils.FpgaParts import fpga_part, load_parts, part_for_board
 from system.utils.ParameterLoad import PARAMETER_SOURCES
 from system.utils.Rule4MlBoards import board_chiplet_fields, load_boards
 
@@ -148,6 +149,17 @@ class FpgaChiplet:
     # BRAM blocks of the input buffer read in parallel; None sizes the buffer
     # for each operation at the fewest blocks that hold its input.
     input_buffer_blocks: int | None = None
+    # The FPGA part this chiplet is (a key of cfg/fpga_parts.json). With it the
+    # counts must be the part's. None keeps the board-or-counts description.
+    fpga_part: str | None = None
+    # URAM blocks; the estimators of this repository do not model them.
+    uram: int | None = None
+    # Process of the part in nm, as a fact; ``node`` is the carbon-model node.
+    process_nm: int | None = None
+    # The share of each resource a design may use, by label (lut, ff, bram,
+    # dsp, uram). None means all of it: the old behaviour. A full chiplet does
+    # not route, so a part-based chiplet carries the tool's default cap.
+    max_utilization: dict | None = None
 
     @property
     def chiplet_type(self):
@@ -169,6 +181,10 @@ class FpgaChiplet:
             "luts",
             "ffs",
             "board",
+            "fpga_part",
+            "uram",
+            "process_nm",
+            "max_utilization",
             "relu_implementation",
             "softmax_implementation",
             "layernorm_implementation",
@@ -221,6 +237,66 @@ class FpgaChiplet:
                         f"has {expected[field]}"
                     )
 
+        part_name = value.get("fpga_part")
+        uram = value.get("uram")
+        process_nm = value.get("process_nm")
+        max_utilization = value.get("max_utilization")
+        if part_name is not None:
+            parts = load_parts()["parts"]
+            if part_name not in parts:
+                raise ValueError(
+                    f"{name}.fpga_part must be one of: {', '.join(parts)}"
+                )
+            part = fpga_part(part_name)
+            expected_counts = {
+                "clbs": part["lut"] // 8,
+                "brams": part["bram36"] * 2,
+                "dsps": part["dsp"],
+            }
+            for field, expected_count in expected_counts.items():
+                if counts[field] != expected_count:
+                    raise ValueError(
+                        f"{name}.{field} is {counts[field]} but part '{part_name}' "
+                        f"has {expected_count}"
+                    )
+            for field, expected_count in (
+                ("luts", part["lut"]), ("ffs", part["ff"]), ("uram", part["uram"]),
+            ):
+                given = uram if field == "uram" else optional_counts.get(field)
+                if given is not None and given != expected_count:
+                    raise ValueError(
+                        f"{name}.{field} is {given} but part '{part_name}' "
+                        f"has {expected_count}"
+                    )
+            if board is not None and part_for_board(board) != part_name:
+                raise ValueError(
+                    f"{name}.board '{board}' is not the board of part '{part_name}'"
+                )
+            if part["max_clock_hz"] and frequency_hz > part["max_clock_hz"]:
+                raise ValueError(
+                    f"{name}.frequency_hz {frequency_hz:.0f} is above the "
+                    f"{part['max_clock_hz']:.0f} Hz limit of part '{part_name}'"
+                )
+        if uram is not None and (isinstance(uram, bool) or not isinstance(uram, int) or uram < 0):
+            raise ValueError(f"{name}.uram must be a non-negative integer when present")
+        if process_nm is not None and (
+            isinstance(process_nm, bool) or not isinstance(process_nm, int) or process_nm <= 0
+        ):
+            raise ValueError(f"{name}.process_nm must be a positive integer when present")
+        if max_utilization is not None:
+            labels = {"lut", "ff", "bram", "dsp", "uram"}
+            if (
+                not isinstance(max_utilization, dict)
+                or not set(max_utilization) <= labels
+                or any(
+                    isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v <= 1
+                    for v in max_utilization.values()
+                )
+            ):
+                raise ValueError(
+                    f"{name}.max_utilization must map {', '.join(sorted(labels))} to a share in (0, 1]"
+                )
+
         input_buffer_blocks = value.get("input_buffer_blocks")
         if input_buffer_blocks is not None and (
             isinstance(input_buffer_blocks, bool)
@@ -265,4 +341,8 @@ class FpgaChiplet:
             board=board,
             parameter_source=parameter_source,
             input_buffer_blocks=input_buffer_blocks,
+            fpga_part=part_name,
+            uram=uram,
+            process_nm=process_nm,
+            max_utilization=None if max_utilization is None else dict(max_utilization),
         )

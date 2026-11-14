@@ -21,6 +21,7 @@ import math
 import random
 
 from chiplet.n_utils import get_area_power, get_sram_area_energy
+from system.utils.FpgaParts import part_chiplet_fields
 from system.utils.Rule4MlBoards import board_chiplet_fields
 from system.utils.ArchitectureModel import (
     regenerate_memory_channels,
@@ -57,6 +58,7 @@ MOVE_TYPES = (
     "fpga_count",
     "fpga_set",
     "fpga_board",
+    "fpga_part",
     "fpga_frequency",
     "fpga_relu",
     "fpga_input_buffer",
@@ -65,6 +67,8 @@ MOVE_TYPES = (
     "protocol",
     "transfer_model",
 )
+
+_PART_FIELDS = ("fpga_part", "uram", "process_nm", "max_utilization")
 
 _GEMM_SETTING_MOVES = {
     "gemm_dataflow": "dataflow",
@@ -532,6 +536,16 @@ def mutate_atlas_design_point(
                     f"{fpga_key} must name one of the search space boards "
                     f"({', '.join(boards)}) with its 'board' field"
                 )
+    parts = params.get("fpga", {}).get("parts")
+    if parts is None:
+        candidate_moves.remove("fpga_part")
+    else:
+        for fpga_key in endpoints.fpga_keys:
+            if architecture[fpga_key].get("fpga_part") not in parts:
+                raise UnsupportedEvaluation(
+                    f"{fpga_key} must name one of the search space parts "
+                    f"({', '.join(parts)}) with its 'fpga_part' field"
+                )
     if not params.get("fpga", {}).get("input_buffer_blocks"):
         candidate_moves.remove("fpga_input_buffer")
     if not endpoints.fpga_keys:
@@ -629,7 +643,20 @@ def _apply_move(
         board = _choose_alternative(
             rng, params["fpga"]["boards"], fpga.get("board"), "FPGA board"
         )
+        for stale in _PART_FIELDS:                 # a board chiplet is no longer a part chiplet
+            fpga.pop(stale, None)
         fpga.update(board_chiplet_fields(board))
+    elif move == "fpga_part":
+        fpga_key = rng.choice(endpoints.fpga_keys)
+        fpga = moved[fpga_key]
+        part = _choose_alternative(
+            rng, params["fpga"]["parts"], fpga.get("fpga_part"), "FPGA part"
+        )
+        kept_cap = fpga.get("max_utilization")
+        fpga.pop("board", None)                    # the part, not a board, names the chiplet now
+        fpga.update(part_chiplet_fields(part))
+        if kept_cap is not None:                   # a cap the architecture set stays
+            fpga["max_utilization"] = kept_cap
     elif move == "fpga_frequency":
         fpga_key = rng.choice(endpoints.fpga_keys)
         fpga = moved[fpga_key]

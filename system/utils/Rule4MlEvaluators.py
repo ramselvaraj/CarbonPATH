@@ -35,6 +35,7 @@ from system.utils.OperationEvaluator import (
     OperationEvaluator,
     OperationInputAdapter,
 )
+from system.utils.FpgaParts import part_for_board
 from system.utils.Rule4MlBoards import fpga_resource_vector, nearest_board
 from system.utils.Rule4MlInputBuffer import VALUE_BITS, input_buffer, precision_bits
 from system.utils.UnsupportedEvaluation import (
@@ -307,7 +308,12 @@ class Rule4MlActivationEvaluator(OperationEvaluator):
                 "rule4ml reuse_factor must be a positive integer"
             )
 
-        board = settings.get("board") or fpga.board or nearest_board(fpga)
+        board = (
+            settings.get("board")
+            or fpga.board
+            or (fpga.fpga_part and part_for_board(fpga.fpga_part))
+            or nearest_board(fpga)
+        )
         prediction = predict_activation(
             activation=self.activation,
             shape=evaluator_input.shape,

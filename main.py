@@ -76,6 +76,7 @@ from system.utils.DesignPointFile import (
 from system.utils.FpgaActivationMovement import register_fpga_activation_movement
 from system.utils.FusedActivation import fusion_types, register_fused_activation
 from system.utils.FpgaLayerNorm import register_layernorm_evaluators
+from system.utils.NeurigamiEvaluators import register_neurigami_evaluators
 from system.utils.Rule4MlEvaluators import register_rule4ml_evaluators
 from system.utils.FpgaSplitPolicy import build_split_policy
 from system.utils.TensorMovement import MovementRequest, build_movement_service
@@ -474,6 +475,7 @@ def build_default_evaluator_registry():
     )
     register_placeholder_policies(registry)
     register_rule4ml_evaluators(registry)
+    register_neurigami_evaluators(registry)
     register_layernorm_evaluators(registry)
     register_fused_activation(registry)
     return registry

@@ -3,12 +3,16 @@
 This module is the only code that knows the layout of the file. The rest of
 CarbonPATH uses the in-memory architecture dictionary and ``WorkloadMapping``.
 
-The file has four sections:
+The file has four sections, and a fifth when the architecture has FPGA chiplets:
 
 * ``workload``: the name and fingerprint of the graph the mapping is for.
 * ``evaluated_with``: the name and fingerprint of the evaluation profile.
 * ``architecture``: the chiplets, the package, and the link timing.
 * ``workload_mapping``: one entry for each operation and for each handoff.
+* ``fpga_chiplets`` (only with FPGA chiplets): a readable summary of each FPGA
+  chiplet, derived from the architecture section: part, resources, clock,
+  usable share, process, and notes on what is a proxy or unchecked. It is for
+  readers; the file is read from ``architecture`` and this section is ignored.
 
 An architecture file of original CarbonPATH has no sections. It is read as an
 architecture with no workload mapping.
@@ -22,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from system.utils.ArchitectureModel import validate_modular_architecture
+from system.utils.FpgaParts import fpga_summary
 from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 from system.utils.WorkloadMapping import OperationMapping, WorkloadMapping
 
@@ -72,7 +77,7 @@ def design_point_document(architecture, mapping, graph, profile):
                 }
             )
         operations.append(entry)
-    return {
+    document = {
         "format": FORMAT,
         "version": VERSION,
         "workload": {"graph": graph.name, "fingerprint": graph.fingerprint()},
@@ -97,6 +102,10 @@ def design_point_document(architecture, mapping, graph, profile):
             ],
         },
     }
+    summary = fpga_summary(architecture)
+    if summary:
+        document["fpga_chiplets"] = summary
+    return document
 
 
 def write_design_point(path, document):

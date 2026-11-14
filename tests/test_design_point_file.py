@@ -51,8 +51,10 @@ class DesignPointFileTests(unittest.TestCase):
                 "evaluated_with",
                 "architecture",
                 "workload_mapping",
+                "fpga_chiplets",            # this architecture has an FPGA chiplet
             },
         )
+        self.assertEqual(set(self.document["fpga_chiplets"]), {"Chiplet_2"})
         self.assertNotIn("WL_mapping", self.document["architecture"])
         self.assertIn("Chiplet_1", self.document["architecture"])
         self.assertIn("transfer_model", self.document["architecture"])

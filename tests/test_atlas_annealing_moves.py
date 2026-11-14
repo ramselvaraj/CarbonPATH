@@ -255,6 +255,8 @@ class AtlasAnnealingMoveTests(unittest.TestCase):
         for move_name in MOVE_TYPES:
             if move_name in ONE_OPTION_MOVES:
                 continue
+            if move_name == "fpga_part":
+                continue            # needs a part-based design and a parts search space: tests/test_fpga_parts.py
             with self.subTest(move_name=move_name):
                 params = copy.deepcopy(self.search_space)
                 params["move_weights"] = {

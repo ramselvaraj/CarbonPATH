@@ -83,25 +83,32 @@ def load_boards():
     return boards_data
 
 
-def fpga_resource_vector(fpga):
-    """Resource vector for one FpgaChiplet, filling LUT/FF when absent.
-
-    ``clbs`` are expanded with :data:`LUTS_PER_CLB`, and LUTs with
-    :data:`FFS_PER_LUT`, only when the architecture did not declare ``luts`` or
-    ``ffs`` directly.
-    """
+def fpga_capacity_vector(fpga):
+    """What the chiplet has, filling LUT/FF when absent. No usable-share cap is applied."""
     luts = getattr(fpga, "luts", None)
     if luts is None:
         luts = fpga.clbs * LUTS_PER_CLB
     ffs = getattr(fpga, "ffs", None)
     if ffs is None:
         ffs = luts * FFS_PER_LUT
-    return {
-        "lut": luts,
-        "ff": ffs,
-        "bram": fpga.brams,
-        "dsp": fpga.dsps,
-    }
+    return {"lut": luts, "ff": ffs, "bram": fpga.brams, "dsp": fpga.dsps}
+
+
+def fpga_resource_vector(fpga):
+    """Resource vector for one FpgaChiplet, filling LUT/FF when absent.
+
+    ``clbs`` are expanded with :data:`LUTS_PER_CLB`, and LUTs with
+    :data:`FFS_PER_LUT`, only when the architecture did not declare ``luts`` or
+    ``ffs`` directly. When the chiplet has ``max_utilization``, each count is
+    scaled by its share: the vector is what a design may use, not what the part has.
+    """
+    vector = fpga_capacity_vector(fpga)
+    # A chiplet that names a usable share of each resource offers only that
+    # share; one that does not offers all of it, as before.
+    cap = getattr(fpga, "max_utilization", None)
+    if cap:
+        vector = {label: count * cap.get(label, 1.0) for label, count in vector.items()}
+    return vector
 
 
 def nearest_board(fpga, boards=None):
@@ -113,7 +120,7 @@ def nearest_board(fpga, boards=None):
     because its ratio to every capacity is below one.
     """
     boards = boards if boards is not None else load_boards()
-    vector = fpga_resource_vector(fpga)
+    vector = fpga_capacity_vector(fpga)
 
     best_name = None
     best_score = None
