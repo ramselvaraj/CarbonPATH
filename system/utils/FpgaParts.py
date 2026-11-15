@@ -17,6 +17,7 @@ power then come from the LUT-ratio proxy of ``Rule4MlBoards`` and are labelled
 from __future__ import annotations
 
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -97,23 +98,56 @@ def part_chiplet_fields(name):
     }
 
 
-def neurigami_part_for(fpga):
-    """The neurigami part that estimates ``fpga``, or raise naming what is missing."""
+def _capacity(luts, ffs, bram18, dsps):
+    return (luts, ffs, bram18 / BRAM18_PER_BRAM36, dsps)
+
+
+def nearest_calibrated_part(luts, ffs, bram18, dsps):
+    """The neurigami-calibrated part whose size is nearest, by the sum of log ratios."""
+    have = _capacity(luts, ffs, bram18, dsps)
+    best = None
+    for name, entry in load_parts()["parts"].items():
+        if not entry["neurigami"]:
+            continue
+        size = (entry["lut"], entry["ff"], entry["bram36"], entry["dsp"])
+        distance = sum(abs(math.log((a + 1) / (b + 1))) for a, b in zip(have, size))
+        if best is None or distance < best[0]:
+            best = (distance, name)
+    return best[1]
+
+
+def _own_part(fpga):
     name = getattr(fpga, "fpga_part", None)
     if name is None and getattr(fpga, "board", None):
         name = part_for_board(fpga.board)
-    if name is None:
-        raise UnsupportedEvaluation(
-            f"FPGA chiplet {fpga.name} names no fpga_part (or a board with a known part), "
-            "so neurigami cannot tell which part to estimate"
-        )
-    if not fpga_part(name)["neurigami"]:
-        known = ", ".join(n for n, e in load_parts()["parts"].items() if e["neurigami"])
-        raise UnsupportedEvaluation(
-            f"neurigami has no calibration for part '{name}' (FPGA chiplet {fpga.name}); "
-            f"it knows {known}"
-        )
     return name
+
+
+def neurigami_calibration(fpga):
+    """(part, source) that neurigami's delay model uses for ``fpga``.
+
+    A free chiplet spec need not be a real part. Neurigami takes its budgets
+    from the chiplet, and only the timing calibration needs a part. The order:
+    ``calibration_part`` of the chiplet, the chiplet's own part when neurigami
+    knows it, else the calibrated part nearest in size.
+    """
+    chosen = getattr(fpga, "calibration_part", None)
+    if chosen is not None:
+        return chosen, "calibration_part set on the chiplet"
+    own = _own_part(fpga)
+    if own is not None and fpga_part(own)["neurigami"]:
+        return own, "the chiplet's own part"
+    luts = getattr(fpga, "luts", None) or fpga.clbs * LUTS_PER_CLB
+    ffs = getattr(fpga, "ffs", None) or luts * FFS_PER_LUT
+    return (
+        nearest_calibrated_part(luts, ffs, fpga.brams, fpga.dsps),
+        "nearest calibrated part by size",
+    )
+
+
+def neurigami_part_for(fpga):
+    """The neurigami part whose delay calibration estimates ``fpga``."""
+    return neurigami_calibration(fpga)[0]
 
 
 def fpga_summary(architecture):
@@ -129,11 +163,16 @@ def fpga_summary(architecture):
         name = chiplet.get("fpga_part")
         part = fpga_part(name) if name in load_parts()["parts"] else None
         luts = chiplet.get("luts") or chiplet["clbs"] * LUTS_PER_CLB
+        ffs = chiplet.get("ffs") or luts * FFS_PER_LUT
+        calibration, calibration_source = _calibration_of(chiplet, name, luts, ffs)
         entry = {
             "fpga_part": name,
             "board": chiplet.get("board"),
+            "spec_kind": "part" if part else "custom",
+            "neurigami_calibration_part": calibration,
+            "neurigami_calibration_source": calibration_source,
             "luts": luts,
-            "ffs": chiplet.get("ffs") or luts * FFS_PER_LUT,
+            "ffs": ffs,
             "bram_18k": chiplet["brams"],
             "dsps": chiplet["dsps"],
             "uram": chiplet.get("uram"),
@@ -157,8 +196,26 @@ def fpga_summary(architecture):
     return summary
 
 
+def _calibration_of(chiplet, name, luts, ffs):
+    chosen = chiplet.get("calibration_part")
+    if chosen is not None:
+        return chosen, "calibration_part set on the chiplet"
+    if name in load_parts()["parts"] and fpga_part(name)["neurigami"]:
+        return name, "the chiplet's own part"
+    return (
+        nearest_calibrated_part(luts, ffs, chiplet["brams"], chiplet["dsps"]),
+        "nearest calibrated part by size",
+    )
+
+
 def _notes(entry, part):
     notes = []
+    if entry["neurigami_calibration_part"] != entry["fpga_part"]:
+        notes.append(
+            f"LIMITATION: neurigami's delay model is calibrated on "
+            f"'{entry['neurigami_calibration_part']}' ({entry['neurigami_calibration_source']}), "
+            "not on this chiplet; the resources follow its budget, the timing may be off"
+        )
     if part is not None and not part["max_clock_hz"]:
         notes.append("no sourced max clock for this part: the clock is a target, not checked")
     if entry["area_power_source"] == "proxy":

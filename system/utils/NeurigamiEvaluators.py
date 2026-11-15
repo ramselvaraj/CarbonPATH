@@ -16,7 +16,11 @@ Evaluator settings, read from the profile's per-operation ``settings`` object:
 * ``neurigami_home``       neurigami checkout; default ``$NEURIGAMI_HOME``.
 * ``neurigami_python``     its Python; default ``$NEURIGAMI_PYTHON`` or ``<home>/.venv``.
 * ``part``                 neurigami part for the estimate; overrides the chiplet's own.
-                           Default: the chiplet's ``fpga_part`` (or its board's part).
+                           Default: the chiplet's ``calibration_part``, else its own part (or its
+                           board's) when neurigami knows it, else the nearest calibrated part by size.
+                           LIMITATION: the part only picks neurigami's timing calibration (fitted on
+                           xck26). A free chiplet spec far from it gets resources that follow its
+                           budget but timing that may be off.
 * ``latency_metric``       ``first_latency`` (default) or ``interval``, in cycles.
 * ``energy_per_element_pj``  dynamic energy per element; default ``0.0``.
 * ``cache_dir``            result cache; default ``output/neurigami_cache``.

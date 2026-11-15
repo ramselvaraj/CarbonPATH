@@ -150,7 +150,7 @@ class FpgaChiplet:
     # for each operation at the fewest blocks that hold its input.
     input_buffer_blocks: int | None = None
     # The FPGA part this chiplet is (a key of cfg/fpga_parts.json). With it the
-    # counts must be the part's. None keeps the board-or-counts description.
+    # counts must be the part's. None means a free spec: any counts.
     fpga_part: str | None = None
     # URAM blocks; the estimators of this repository do not model them.
     uram: int | None = None
@@ -160,6 +160,9 @@ class FpgaChiplet:
     # dsp, uram). None means all of it: the old behaviour. A full chiplet does
     # not route, so a part-based chiplet carries the tool's default cap.
     max_utilization: dict | None = None
+    # The part whose timing calibration neurigami uses. A free spec (no
+    # fpga_part) need not name one: the nearest calibrated part is used.
+    calibration_part: str | None = None
 
     @property
     def chiplet_type(self):
@@ -185,6 +188,7 @@ class FpgaChiplet:
             "uram",
             "process_nm",
             "max_utilization",
+            "calibration_part",
             "relu_implementation",
             "softmax_implementation",
             "layernorm_implementation",
@@ -277,6 +281,14 @@ class FpgaChiplet:
                     f"{name}.frequency_hz {frequency_hz:.0f} is above the "
                     f"{part['max_clock_hz']:.0f} Hz limit of part '{part_name}'"
                 )
+        calibration_part = value.get("calibration_part")
+        if calibration_part is not None:
+            parts = load_parts()["parts"]
+            if calibration_part not in parts or not parts[calibration_part]["neurigami"]:
+                known = ", ".join(n for n, e in parts.items() if e["neurigami"])
+                raise ValueError(
+                    f"{name}.calibration_part must be one of: {known}"
+                )
         if uram is not None and (isinstance(uram, bool) or not isinstance(uram, int) or uram < 0):
             raise ValueError(f"{name}.uram must be a non-negative integer when present")
         if process_nm is not None and (
@@ -345,4 +357,5 @@ class FpgaChiplet:
             uram=uram,
             process_nm=process_nm,
             max_utilization=None if max_utilization is None else dict(max_utilization),
+            calibration_part=calibration_part,
         )

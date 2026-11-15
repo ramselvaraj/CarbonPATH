@@ -18,12 +18,13 @@ READ_CYCLES = 8
 
 
 def _fpga(brams=200, dsps=500, clbs=10000, frequency_hz=300000000, fpga_part="xczu7ev", board=None,
-          max_utilization=None):
+          max_utilization=None, luts=None, ffs=None, calibration_part=None):
     return FpgaChiplet(
         id=1, name="Chiplet_2", frequency_hz=frequency_hz, clbs=clbs, brams=brams,
         dsps=dsps, area=10.0, power=2.0, node=7,
         relu_implementation=FpgaReluImplementation(clbs_per_lane=5),
         fpga_part=fpga_part, board=board, max_utilization=max_utilization,
+        luts=luts, ffs=ffs, calibration_part=calibration_part,
     )
 
 
@@ -151,14 +152,21 @@ class NeurigamiEvaluatorTest(unittest.TestCase):
             _evaluate(fpga=_fpga(fpga_part="xc7z020"), settings={"part": "xck26"})
         self.assertEqual(run.call_args.kwargs["part"], "xck26")
 
-    def test_a_board_chiplet_uses_its_boards_part_and_an_uncalibrated_one_is_refused(self):
+    def test_a_board_chiplet_uses_its_boards_part_and_an_uncalibrated_one_uses_the_nearest(self):
         with _patched() as run:
             _evaluate(fpga=_fpga(fpga_part=None, board="pynq-z2"))
         self.assertEqual(run.call_args.kwargs["part"], "xc7z020")
-        with _patched(), self.assertRaisesRegex(UnsupportedEvaluation, "no calibration for part 'xczu9eg'"):
+        with _patched() as run:                      # zcu102 is xczu9eg: not calibrated, so the nearest one
             _evaluate(fpga=_fpga(fpga_part=None, board="zcu102"))
-        with _patched(), self.assertRaisesRegex(UnsupportedEvaluation, "names no fpga_part"):
-            _evaluate(fpga=_fpga(fpga_part=None))
+        self.assertEqual(run.call_args.kwargs["part"], "xczu3eg")   # nearest to the test chiplet's counts
+
+    def test_a_free_spec_uses_the_nearest_part_or_its_calibration_part(self):
+        with _patched() as run:                      # the size of xc7z020
+            _evaluate(fpga=_fpga(fpga_part=None, luts=53200, ffs=106400, clbs=6650, brams=280, dsps=220))
+        self.assertEqual(run.call_args.kwargs["part"], "xc7z020")
+        with _patched() as run:
+            _evaluate(fpga=_fpga(fpga_part=None, calibration_part="xck26"))
+        self.assertEqual(run.call_args.kwargs["part"], "xck26")
 
     def test_the_usable_share_shrinks_the_budget(self):
         with _patched() as run:

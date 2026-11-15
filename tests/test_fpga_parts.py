@@ -116,6 +116,40 @@ class PartChipletTest(unittest.TestCase):
         self.assertEqual(neurigami_part_for(pynq), "xc7z020")
 
 
+CUSTOM = Path("cfg/examples/sa_fpga_architecture_custom.json")
+
+
+class FreeSpecTest(unittest.TestCase):
+    def test_a_free_spec_loads_without_a_part_and_keeps_its_own_counts(self):
+        chiplet = FpgaChiplet.from_dict("Chiplet_2", _load(CUSTOM)["Chiplet_2"])
+        self.assertIsNone(chiplet.fpga_part)
+        self.assertEqual((chiplet.luts, chiplet.dsps), (100000, 700))
+
+    def test_its_calibration_is_the_nearest_part_unless_set(self):
+        value = _load(CUSTOM)["Chiplet_2"]
+        chiplet = FpgaChiplet.from_dict("Chiplet_2", value)
+        self.assertEqual(neurigami_part_for(chiplet), "xck26")
+        value["calibration_part"] = "xc7z020"
+        self.assertEqual(neurigami_part_for(FpgaChiplet.from_dict("Chiplet_2", value)), "xc7z020")
+
+    def test_a_calibration_part_neurigami_does_not_know_is_refused(self):
+        value = _load(CUSTOM)["Chiplet_2"]
+        for bad in ("xczu9eg", "nope"):
+            value["calibration_part"] = bad
+            with self.assertRaisesRegex(ValueError, "calibration_part"):
+                FpgaChiplet.from_dict("Chiplet_2", value)
+
+    def test_the_summary_says_custom_and_records_the_limitation(self):
+        entry = fpga_summary(_load(CUSTOM))["Chiplet_2"]
+        self.assertEqual(entry["spec_kind"], "custom")
+        self.assertIsNone(entry["fpga_part"])
+        self.assertEqual(entry["neurigami_calibration_part"], "xck26")
+        self.assertIn("LIMITATION", " ".join(entry["notes"]))
+        own = fpga_summary(_load(ARCHITECTURE))["Chiplet_2"]
+        self.assertEqual(own["spec_kind"], "part")
+        self.assertNotIn("LIMITATION", " ".join(own["notes"]))
+
+
 class PartMoveTest(unittest.TestCase):
     def setUp(self):
         self.architecture = _load(ARCHITECTURE)
