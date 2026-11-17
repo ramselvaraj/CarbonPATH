@@ -49,7 +49,7 @@ def _quant(name, source, target, scale, signed):
 
 
 #: op name -> (ONNX op type, extra node attributes from the parameter, constant inputs from the parameter).
-#: ``param`` is the op's one number: the slope of leaky_relu, the threshold of thresholded_relu.
+#: ``param`` is the op's one number: the slope of leaky_relu, the threshold of thresholded_relu, the max value of clipped_relu.
 _OPS = {
     "relu": ("Relu", lambda param: {}, lambda param: []),
     "leaky_relu": ("LeakyRelu", lambda param: {"alpha": 0.01 if param is None else param}, lambda param: []),
@@ -59,6 +59,9 @@ _OPS = {
     "hard_sigmoid": ("HardSigmoid", lambda param: {}, lambda param: []),
     "gelu": ("Gelu", lambda param: {}, lambda param: []),
     "clip": ("Clip", lambda param: {}, lambda param: [("lo", -1.0), ("hi", 1.0)]),
+    # hls4ml's hard_tanh at its defaults is clip(x, -1, 1); ClippedReLU is clip(x, 0, max_value).
+    "hard_tanh": ("Clip", lambda param: {}, lambda param: [("lo", -1.0), ("hi", 1.0)]),
+    "clipped_relu": ("Clip", lambda param: {}, lambda param: [("lo", 0.0), ("hi", 6.0 if param is None else param)]),
     "softmax": ("Softmax", lambda param: {"axis": -1}, lambda param: []),
 }
 OPS = tuple(_OPS)

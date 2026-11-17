@@ -28,8 +28,13 @@ SIMPLE_ACTIVATIONS = ("relu", "leaky_relu", "thresholded_relu")
 TABLE_ACTIVATIONS = ("sigmoid", "tanh")
 #: Elementwise activations that can be fused with the GEMM directly before them.
 FUSABLE_ACTIVATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS
+#: Elementwise activations that only neurigami estimates (neurigami builds each as one table). They are
+#: not fusable with a GEMM, and the older profiles have no evaluator for them.
+NEURIGAMI_ACTIVATIONS = ("clipped_relu", "hard_sigmoid", "hard_tanh")
 #: Every operation type that an FPGA endpoint runs.
-FPGA_OPERATIONS = SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + ("softmax", "layernorm")
+FPGA_OPERATIONS = (
+    SIMPLE_ACTIVATIONS + TABLE_ACTIVATIONS + NEURIGAMI_ACTIVATIONS + ("softmax", "layernorm")
+)
 SUPPORTED_OPERATION_TYPES = ("gemm",) + FPGA_OPERATIONS
 
 # ATLAS node class -> ATLAS ``activation`` attribute -> operation type.
@@ -38,7 +43,10 @@ _ACTIVATION_TYPES = {
     "ParametrizedActivation": {
         "leakyrelu": "leaky_relu",
         "thresholdedrelu": "thresholded_relu",
+        "clippedrelu": "clipped_relu",      # Keras ReLU(max_value=...); ``activ_param`` is max_value
     },
+    # hls4ml HardActivation: clip(slope * x + shift, 0, 1) and its tanh form.
+    "HardActivation": {"hard_sigmoid": "hard_sigmoid", "hard_tanh": "hard_tanh"},
 }
 _GENERIC_STEMS = {"graph_dump", "graph", "dump"}
 _MISSING = object()

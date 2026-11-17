@@ -28,7 +28,9 @@ Evaluator settings, read from the profile's per-operation ``settings`` object:
 The chiplet's LUT, FF, BRAM and DSP counts go to neurigami as the area budget, so a foldable op (softmax) gets
 the fastest lanes that fit the chiplet. A softmax over a [rows, vector] tensor is built for one row; the other
 rows stream through the same hardware one interval apart. The ATLAS ``activ_param`` attribute gives the slope of
-leaky_relu and the threshold of thresholded_relu.
+leaky_relu, the threshold of thresholded_relu and the max value of clipped_relu. hard_sigmoid and hard_tanh
+are built as one table like sigmoid: a table's cost does not depend on its function, so the slope and shift of
+the ATLAS HardActivation node do not change the estimate.
 
 The clock is the FPGA chiplet's own: neurigami pipelines for that period and
 the cycle counts convert to nanoseconds at that frequency.
@@ -58,9 +60,10 @@ from system.utils.UnsupportedEvaluation import UnsupportedEvaluation
 #: Operation types neurigami can build as a single-layer model here.
 NEURIGAMI_SUPPORTED_OPERATIONS = (
     "relu", "leaky_relu", "thresholded_relu", "sigmoid", "tanh", "softmax",
+    "clipped_relu", "hard_sigmoid", "hard_tanh",
 )
 #: Operations that carry one number in the ATLAS ``activ_param`` attribute, with neurigami's default for it.
-_PARAMETER_DEFAULTS = {"leaky_relu": 0.01, "thresholded_relu": 1.0}
+_PARAMETER_DEFAULTS = {"leaky_relu": 0.01, "thresholded_relu": 1.0, "clipped_relu": 6.0}
 
 _SUPPORTED_SETTINGS = {
     "neurigami_home",

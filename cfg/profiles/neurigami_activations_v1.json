@@ -23,6 +23,18 @@
             "id": "neurigami_fpga_tanh_v1",
             "settings": {}
         },
+        "clipped_relu": {
+            "id": "neurigami_fpga_clipped_relu_v1",
+            "settings": {}
+        },
+        "hard_sigmoid": {
+            "id": "neurigami_fpga_hard_sigmoid_v1",
+            "settings": {}
+        },
+        "hard_tanh": {
+            "id": "neurigami_fpga_hard_tanh_v1",
+            "settings": {}
+        },
         "softmax": {
             "id": "neurigami_fpga_softmax_v1",
             "settings": {}

@@ -131,6 +131,36 @@ class NeurigamiEvaluatorTest(unittest.TestCase):
                 self.assertEqual(run.call_args.kwargs["param"], expected)
                 self.assertEqual(run.call_args.kwargs["op"], op)
 
+    def test_atlas_hard_and_clipped_activations_are_parsed_and_estimated(self):
+        cases = (
+            ("HardActivation", {"activation": "hard_sigmoid", "slope": 0.2, "shift": 0.5}, "hard_sigmoid", None),
+            ("HardActivation", {"activation": "hard_tanh", "slope": 0.5, "shift": 0.5}, "hard_tanh", None),
+            ("ParametrizedActivation", {"activation": "clippedrelu", "activ_param": 3.0}, "clipped_relu", 3.0),
+            ("ParametrizedActivation", {"activation": "clippedrelu"}, "clipped_relu", 6.0),
+        )
+        for node_class, attrs, op, param in cases:
+            with self.subTest(op=op, attrs=attrs):
+                nodes = [
+                    {"name": "input_layer", "class": "Input", "inputs": [], "output": {"name": "input_layer", "shape": [4, 8]}},
+                    {"name": "a", "class": node_class, "inputs": [{"name": "input_layer", "shape": [4, 8]}],
+                     "output": {"name": "a", "shape": [4, 8]}, "attrs": attrs},
+                ]
+                operation = parse_atlas_graph(nodes, "graph").operations[0]
+                self.assertEqual(operation.operation_type, op)
+                with _patched() as run:
+                    _evaluate(operation=operation, op=op)
+                self.assertEqual(run.call_args.kwargs["op"], op)
+                self.assertEqual(run.call_args.kwargs["param"], param)
+
+    def test_an_unknown_hard_activation_is_refused(self):
+        nodes = [
+            {"name": "input_layer", "class": "Input", "inputs": [], "output": {"name": "input_layer", "shape": [4, 8]}},
+            {"name": "a", "class": "HardActivation", "inputs": [{"name": "input_layer", "shape": [4, 8]}],
+             "output": {"name": "a", "shape": [4, 8]}, "attrs": {"activation": "hard_swish"}},
+        ]
+        with self.assertRaisesRegex(UnsupportedEvaluation, "unsupported activation"):
+            parse_atlas_graph(nodes, "graph")
+
     def test_softmax_is_built_for_one_row_and_the_rest_stream_through(self):
         nodes = [
             {"name": "input_layer", "class": "Input", "inputs": [], "output": {"name": "input_layer", "shape": [8, 16]}},
@@ -199,7 +229,8 @@ class NeurigamiEvaluatorTest(unittest.TestCase):
 
     def test_every_supported_operation_is_registered(self):
         registry = register_neurigami_evaluators(EvaluatorRegistry())
-        for op in ("relu", "leaky_relu", "thresholded_relu", "sigmoid", "tanh", "softmax"):
+        for op in ("relu", "leaky_relu", "thresholded_relu", "sigmoid", "tanh", "softmax",
+                   "clipped_relu", "hard_sigmoid", "hard_tanh"):
             self.assertIn(f"neurigami_fpga_{op}_v1", registry)
         with self.assertRaises(ValueError):
             register_neurigami_evaluators(None)
@@ -220,7 +251,7 @@ class NeurigamiRealBuildTest(unittest.TestCase):
         self.assertEqual(result["dsp"], 0)
 
     def test_every_activation_builds(self):
-        for op in ("leaky_relu", "thresholded_relu", "sigmoid", "tanh"):
+        for op in ("leaky_relu", "thresholded_relu", "sigmoid", "tanh", "hard_sigmoid", "hard_tanh", "clipped_relu"):
             with self.subTest(op=op):
                 result = self._run(op, 128, param=0.125)
                 self.assertEqual(result["interval"], 128)
